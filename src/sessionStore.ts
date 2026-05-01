@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SessionRecord } from "./types.js";
+import type { SessionListSnapshot, SessionRecord } from "./types.js";
 
 interface StoreFile {
   sessions: SessionRecord[];
+  listSnapshots?: SessionListSnapshot[];
 }
 
 export class SessionStore {
@@ -18,12 +19,13 @@ export class SessionStore {
     try {
       await fs.access(this.filePath);
     } catch {
-      await this.write({ sessions: [] });
+      await this.write({ sessions: [], listSnapshots: [] });
     }
   }
 
   async upsert(record: SessionRecord): Promise<void> {
     const data = await this.read();
+    data.listSnapshots ??= [];
     const index = data.sessions.findIndex(
       (candidate) => candidate.slackChannelId === record.slackChannelId && candidate.slackThreadTs === record.slackThreadTs,
     );
@@ -51,9 +53,32 @@ export class SessionStore {
     return (await this.read()).sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  async saveListSnapshot(snapshot: SessionListSnapshot): Promise<void> {
+    const data = await this.read();
+    data.listSnapshots ??= [];
+    const index = data.listSnapshots.findIndex(
+      (candidate) => candidate.slackUserId === snapshot.slackUserId && candidate.slackChannelId === snapshot.slackChannelId,
+    );
+    if (index >= 0) {
+      data.listSnapshots[index] = snapshot;
+    } else {
+      data.listSnapshots.push(snapshot);
+    }
+    await this.write(data);
+  }
+
+  async getListSnapshot(slackUserId: string, slackChannelId: string): Promise<SessionListSnapshot | undefined> {
+    const data = await this.read();
+    return data.listSnapshots?.find(
+      (snapshot) => snapshot.slackUserId === slackUserId && snapshot.slackChannelId === slackChannelId,
+    );
+  }
+
   private async read(): Promise<StoreFile> {
     const raw = await fs.readFile(this.filePath, "utf8");
-    return JSON.parse(raw) as StoreFile;
+    const parsed = JSON.parse(raw) as StoreFile;
+    parsed.listSnapshots ??= [];
+    return parsed;
   }
 
   private async write(data: StoreFile): Promise<void> {

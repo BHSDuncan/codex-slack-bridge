@@ -17,11 +17,11 @@ export function formatSessionList(sessions: CodexSessionSummary[]): string {
   if (sessions.length === 0) return "No Codex sessions were found in the local session index.";
   return sessions
     .slice(0, 20)
-    .map((session) => {
+    .map((session, index) => {
       const name = session.threadName ? ` - ${session.threadName}` : "";
       const cwd = !session.threadName && session.cwd ? ` - ${session.cwd}` : "";
       const updated = session.updatedAt ? ` (${session.updatedAt})` : "";
-      return `\`${session.id}\`${name}${cwd}${updated}`;
+      return `*${index + 1}.* \`${session.id}\`${name}${cwd}${updated}`;
     })
     .join("\n");
 }

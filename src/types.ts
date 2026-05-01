@@ -39,6 +39,13 @@ export interface MirroredApprovalNotice {
   message: string;
 }
 
+export interface SessionListSnapshot {
+  slackUserId: string;
+  slackChannelId: string;
+  sessions: CodexSessionSummary[];
+  createdAt: string;
+}
+
 export interface CodexSessionSummary {
   id: string;
   threadName?: string;

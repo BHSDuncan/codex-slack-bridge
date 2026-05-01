@@ -30,4 +30,28 @@ describe("SessionStore", () => {
     expect(await store.findByCodexThread("codex-2")).toMatchObject({ slackThreadTs: "100.1" });
     expect(await store.list()).toHaveLength(1);
   });
+
+  it("persists the latest per-user per-channel list snapshot", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-slack-bridge-"));
+    const store = new SessionStore(dir);
+    await store.init();
+
+    await store.saveListSnapshot({
+      slackUserId: "U1",
+      slackChannelId: "C1",
+      sessions: [{ id: "first" }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await store.saveListSnapshot({
+      slackUserId: "U1",
+      slackChannelId: "C1",
+      sessions: [{ id: "second" }],
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+
+    await expect(store.getListSnapshot("U1", "C1")).resolves.toMatchObject({
+      sessions: [{ id: "second" }],
+    });
+    await expect(store.getListSnapshot("U2", "C1")).resolves.toBeUndefined();
+  });
 });

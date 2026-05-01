@@ -173,6 +173,12 @@ export class SlackBridge {
     }
     if (parsed.name === "list") {
       const sessions = await this.codex.listSessions();
+      await this.store.saveListSnapshot({
+        slackUserId: command.user_id,
+        slackChannelId: command.channel_id,
+        sessions: sessions.slice(0, 20),
+        createdAt: now(),
+      });
       await respond({ response_type: "ephemeral", text: formatSessionList(sessions) });
       return;
     }
