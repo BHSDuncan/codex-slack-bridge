@@ -46,8 +46,38 @@ OpenClaw is intentionally not used in v1. Direct Codex CLI/app-server integratio
 | `BRIDGE_DATA_DIR` | No | Directory for bridge-local state, including Slack-thread-to-Codex-session mappings. Defaults to `.bridge-data` in this repo. |
 | `BRIDGE_ENABLED_ON_START` | No | Set to `true` to allow Slack control immediately when the daemon starts. Default is `false`, so you must run `/codex enable`. |
 | `BRIDGE_APPROVAL_POLICY` | No | Codex approval policy for turns started by the bridge. Supported values are `on-request`, `untrusted`, and `never`; default is `on-request`. |
+| `BRIDGE_USE_CAFFEINATE` | No | Set to `true` only if the LaunchAgent should run the bridge under `caffeinate -dimsu`. Default is `false`; see durability notes below. |
 | `BRIDGE_CODEX_MODEL` | No | Optional Codex model override for bridge-created turns. Leave unset to use your Codex config default. |
 | `BRIDGE_CODEX_PROFILE` | No | Optional Codex profile name for the fallback `codex exec` adapter. The app-server adapter currently uses direct config fields instead of profiles. |
+
+## Running with launchd
+
+For daily use on macOS, install the bridge as a user LaunchAgent:
+
+```sh
+npm run launchd:install
+```
+
+This writes `~/Library/LaunchAgents/com.duncan.codex-slack-bridge.plist`, starts the service for your current login session, and restarts it if it crashes. Logs are written under `.bridge-data/logs/`.
+
+Useful commands:
+
+```sh
+npm run launchd:status
+npm run launchd:uninstall
+```
+
+The LaunchAgent starts the daemon at login, but the bridge can still remain logically disabled if `BRIDGE_ENABLED_ON_START=false`. In that setup the process is available and connected to Slack, but Codex access still requires `/codex enable`.
+
+### Caffeinate
+
+`launchd` makes the process restart and reconnect, but it does not make the Mac operate while asleep. If the laptop sleeps, the bridge and local Codex sessions pause and Slack Socket Mode disconnects until wake.
+
+Use `BRIDGE_USE_CAFFEINATE=true` only when you deliberately want the LaunchAgent to prevent idle sleep while the bridge is running. That is useful during live testing or when you expect to step away during a long Codex turn, but it can drain battery and keep the laptop warm. The default is `false`; for occasional use, running this in a separate terminal is often better:
+
+```sh
+caffeinate -dimsu
+```
 
 ## Slack commands
 
