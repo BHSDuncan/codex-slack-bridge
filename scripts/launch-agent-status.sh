@@ -1,6 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
 
-LABEL="${BRIDGE_LAUNCHD_LABEL:-com.duncan.codex-slack-bridge}"
+LABEL="${BRIDGE_LAUNCHD_LABEL:-io.github.codex-slack-bridge}"
 
 launchctl print "gui/$(id -u)/$LABEL"

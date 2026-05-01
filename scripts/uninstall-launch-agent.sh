@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-LABEL="${BRIDGE_LAUNCHD_LABEL:-com.duncan.codex-slack-bridge}"
+LABEL="${BRIDGE_LAUNCHD_LABEL:-io.github.codex-slack-bridge}"
 PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 launchctl bootout "gui/$(id -u)" "$PLIST_PATH" >/dev/null 2>&1 || true

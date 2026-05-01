@@ -59,7 +59,7 @@ For daily use on macOS, install the bridge as a user LaunchAgent:
 npm run launchd:install
 ```
 
-This writes `~/Library/LaunchAgents/com.duncan.codex-slack-bridge.plist`, starts the service for your current login session, and restarts it if it crashes. Logs are written under `.bridge-data/logs/`.
+This writes `~/Library/LaunchAgents/io.github.codex-slack-bridge.plist`, starts the service for your current login session, and restarts it if it crashes. Logs are written under `.bridge-data/logs/`.
 
 Useful commands:
 
@@ -88,7 +88,7 @@ npm run launchd:install
 To restart the currently installed service without rewriting the plist:
 
 ```sh
-launchctl kickstart -k gui/$(id -u)/com.duncan.codex-slack-bridge
+launchctl kickstart -k gui/$(id -u)/io.github.codex-slack-bridge
 ```
 
 To watch logs during restart:

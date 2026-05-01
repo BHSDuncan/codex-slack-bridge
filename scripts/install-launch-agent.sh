@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-LABEL="${BRIDGE_LAUNCHD_LABEL:-com.duncan.codex-slack-bridge}"
+LABEL="${BRIDGE_LAUNCHD_LABEL:-io.github.codex-slack-bridge}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$PLIST_DIR/$LABEL.plist"
