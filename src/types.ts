@@ -30,6 +30,7 @@ export interface SessionRecord {
 export interface MirroredTurnComplete {
   threadId: string;
   turnId?: string;
+  prompt?: string;
   finalMessage: string;
 }
 

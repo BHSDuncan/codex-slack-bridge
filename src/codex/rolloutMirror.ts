@@ -15,11 +15,15 @@ interface MirrorState {
   watcher?: FSWatcher;
   poller?: NodeJS.Timeout;
   seenApprovals: Set<string>;
+  activeTurnId?: string;
+  promptsByTurnId: Map<string, string>;
   onComplete: CompleteHandler;
   onApproval: ApprovalHandler;
 }
 
 interface ParsedRolloutEvent {
+  taskStarted?: { turnId: string };
+  userMessage?: { message: string };
   complete?: Omit<MirroredTurnComplete, "threadId">;
   approval?: Omit<MirroredApprovalNotice, "threadId">;
 }
@@ -51,6 +55,7 @@ export class RolloutMirror {
       buffer: "",
       reading: false,
       seenApprovals: new Set(),
+      promptsByTurnId: new Map(),
       onComplete,
       onApproval,
     };
@@ -115,8 +120,22 @@ export class RolloutMirror {
 
     for (const line of lines) {
       const parsed = parseRolloutLine(state.threadId, line);
+      if (parsed.taskStarted) {
+        state.activeTurnId = parsed.taskStarted.turnId;
+      }
+      if (parsed.userMessage && state.activeTurnId) {
+        state.promptsByTurnId.set(state.activeTurnId, parsed.userMessage.message);
+      }
       if (parsed.complete) {
-        await state.onComplete({ threadId: state.threadId, ...parsed.complete });
+        await state.onComplete({
+          threadId: state.threadId,
+          ...parsed.complete,
+          prompt: parsed.complete.turnId ? state.promptsByTurnId.get(parsed.complete.turnId) : undefined,
+        });
+        if (parsed.complete.turnId) {
+          state.promptsByTurnId.delete(parsed.complete.turnId);
+          if (state.activeTurnId === parsed.complete.turnId) state.activeTurnId = undefined;
+        }
       }
       if (parsed.approval) {
         const key = `${parsed.approval.turnId ?? ""}:${parsed.approval.message}`;
@@ -142,6 +161,12 @@ function parseRolloutLine(threadId: string, line: string): ParsedRolloutEvent {
   if (!isRecord(parsed) || parsed.type !== "event_msg" || !isRecord(parsed.payload)) return {};
 
   const payload = parsed.payload;
+  if (payload.type === "task_started" && typeof payload.turn_id === "string") {
+    return { taskStarted: { turnId: payload.turn_id } };
+  }
+  if (payload.type === "user_message" && typeof payload.message === "string" && payload.message.trim()) {
+    return { userMessage: { message: payload.message } };
+  }
   if (payload.type === "task_complete" && typeof payload.last_agent_message === "string" && payload.last_agent_message.trim()) {
     return {
       complete: {

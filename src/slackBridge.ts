@@ -94,6 +94,12 @@ function sessionListLine(session: CodexSessionSummary, index: number): string {
   return `*${index + 1}.* \`${session.id}\`${name}${updated}`;
 }
 
+function formatMirroredFinal(prompt: string, finalMessage: string): string {
+  const normalizedPrompt = prompt.trim();
+  if (!normalizedPrompt) return finalMessage;
+  return `*Prompt*\n>${normalizedPrompt.replace(/\n/g, "\n>")}\n\n*Final message*\n${finalMessage}`;
+}
+
 export class SlackBridge {
   private app: App;
   private config: BridgeConfig;
@@ -502,7 +508,10 @@ export class SlackBridge {
 
   private async postMirroredFinal(result: TurnResult): Promise<void> {
     if (this.shouldIgnoreMirroredFinal(result.threadId)) return;
-    await this.postFinal(result);
+    await this.postFinal({
+      ...result,
+      finalMessage: "prompt" in result && typeof result.prompt === "string" ? formatMirroredFinal(result.prompt, result.finalMessage) : result.finalMessage,
+    });
   }
 
   private async postMirroredApprovalNotice(threadId: string, message: string): Promise<void> {

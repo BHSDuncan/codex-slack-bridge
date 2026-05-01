@@ -26,6 +26,64 @@ describe("RolloutMirror", () => {
     });
   });
 
+  it("tracks the prompt that belongs to an appended terminal-owned turn", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "rollout-mirror-"));
+    const rolloutPath = path.join(dir, "rollout.jsonl");
+    await fs.writeFile(rolloutPath, "", "utf8");
+
+    const mirror = new RolloutMirror(25);
+    const completions: MirroredTurnComplete[] = [];
+    await mirror.watch(
+      "thread-1",
+      rolloutPath,
+      async (event) => {
+        completions.push(event);
+      },
+      async () => {},
+    );
+
+    await fs.appendFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "task_started",
+            turn_id: "turn-1",
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "user_message",
+            message: "What did I ask you to do?",
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            turn_id: "turn-1",
+            last_agent_message: "You asked me to explain the task.",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    await waitFor(() => completions.length === 1);
+    await mirror.stop();
+
+    expect(completions).toEqual([
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        prompt: "What did I ask you to do?",
+        finalMessage: "You asked me to explain the task.",
+      },
+    ]);
+  });
+
   it("parses terminal approval notices as notifications only", async () => {
     const mirror = new RolloutMirror();
     const parsed = await mirror.handleLineForTest(
