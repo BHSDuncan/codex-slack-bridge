@@ -5,7 +5,7 @@ import { BridgeState } from "./bridgeState.js";
 import { formatApprovalMessage } from "./codex/approvalText.js";
 import { RolloutMirror } from "./codex/rolloutMirror.js";
 import { resolveCodexSession } from "./codex/sessionIndex.js";
-import { parseCodexCommand, splitFirstArg } from "./slack/commandParser.js";
+import { parseCodexCommand, parsePositiveOrdinal, splitFirstArg } from "./slack/commandParser.js";
 import { formatBridgeSessions, formatSessionList, helpText, sessionTitleFromPrompt } from "./slack/format.js";
 import { SessionStore } from "./sessionStore.js";
 import type { ApprovalRequest, BridgeConfig, CodexAdapter, CodexSessionSummary, SessionRecord, TurnResult } from "./types.js";
@@ -204,9 +204,12 @@ export class SlackBridge {
         await respond({ response_type: "ephemeral", text: `Usage: \`/codex ${parsed.name} <session-id-or-name> [prompt]\`` });
         return;
       }
-      const session = await resolveCodexSession(first);
+      const session = await this.resolveSessionArgument(command.user_id, command.channel_id, first);
       if (!session) {
-        await respond({ response_type: "ephemeral", text: `Could not resolve Codex session: ${first}` });
+        await respond({
+          response_type: "ephemeral",
+          text: `Could not resolve Codex session: ${first}. Use \`/codex list\` first if you want to attach or resume by number.`,
+        });
         return;
       }
       await this.handleAttach(command.channel_id, session, client, parsed.name === "resume" ? rest : "");
@@ -232,6 +235,19 @@ export class SlackBridge {
     if (this.codex.runTurn) {
       void this.codex.runTurn(threadId, prompt, this.config.defaultCwd).catch((error) => this.postError(channelId, root.ts!, error));
     }
+  }
+
+  private async resolveSessionArgument(
+    slackUserId: string,
+    slackChannelId: string,
+    value: string,
+  ): Promise<CodexSessionSummary | undefined> {
+    const ordinal = parsePositiveOrdinal(value);
+    if (ordinal) {
+      const snapshot = await this.store.getListSnapshot(slackUserId, slackChannelId);
+      return snapshot?.sessions[ordinal - 1];
+    }
+    return resolveCodexSession(value);
   }
 
   private async handleAttach(

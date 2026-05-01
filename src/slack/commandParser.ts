@@ -16,3 +16,8 @@ export function splitFirstArg(args: string): { first?: string; rest: string } {
   const [first, ...rest] = trimmed.split(/\s+/);
   return { first, rest: rest.join(" ").trim() };
 }
+
+export function parsePositiveOrdinal(value: string): number | undefined {
+  if (!/^[1-9]\d*$/.test(value)) return undefined;
+  return Number(value);
+}
