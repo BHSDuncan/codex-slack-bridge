@@ -118,4 +118,13 @@ caffeinate -dimsu
 
 After `new`, `resume`, or `attach`, reply in the created Slack thread to continue that Codex session.
 
+`/codex list` shows numbered recent sessions and stores that list for your Slack user in the current channel or DM. You can use the numbers with later commands:
+
+```text
+/codex attach 1
+/codex resume 2 Continue from here and run tests.
+```
+
+UUIDs and unique title fragments still work. The first ten list entries also include Slack buttons: **Attach** creates a Slack thread for that session, and **Start turn...** opens a prompt modal before creating the thread and starting work.
+
 When `attach` is used on a session that is currently active in the terminal, the bridge watches that session's rollout file and posts future terminal-owned final answers into the Slack thread. Approval prompts from terminal-owned turns are notification-only; approve or deny those in the terminal. After the terminal-owned turn completes, replying in Slack starts the next turn through the bridge.
