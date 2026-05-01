@@ -8,7 +8,15 @@ import { resolveCodexSession } from "./codex/sessionIndex.js";
 import { parseCodexCommand, parsePositiveOrdinal, splitFirstArg } from "./slack/commandParser.js";
 import { formatBridgeSessions, formatSessionList, helpText, sessionTitleFromPrompt } from "./slack/format.js";
 import { SessionStore } from "./sessionStore.js";
-import type { ApprovalRequest, BridgeConfig, CodexAdapter, CodexSessionSummary, SessionRecord, TurnResult } from "./types.js";
+import type {
+  ApprovalRequest,
+  BridgeConfig,
+  CodexAdapter,
+  CodexSessionSummary,
+  SessionRecord,
+  TurnResult,
+  UserInputRequest,
+} from "./types.js";
 
 type SlackCommand = {
   user_id: string;
@@ -160,6 +168,7 @@ export class SlackBridge {
   private registerHandlers(): void {
     this.codex.onFinalMessage(async (result) => this.postFinal(result));
     this.codex.onApprovalRequest(async (request) => this.postApproval(request));
+    this.codex.onUserInputRequest(async (request) => this.postUserInputUnsupported(request));
 
     this.app.command("/codex", async ({ command, ack, respond, client }) => {
       await ack();
@@ -455,7 +464,9 @@ export class SlackBridge {
 
     await this.saveMapping(channelId, root.ts, threadId, sessionTitleFromPrompt(prompt), "app-server");
     if (this.codex.runTurn) {
-      void this.codex.runTurn(threadId, prompt, this.config.defaultCwd).catch((error) => this.postError(channelId, root.ts!, error));
+      const turn = this.codex.runTurn(threadId, prompt, this.config.defaultCwd);
+      this.trackBridgeOwnedTurn(threadId, turn);
+      void turn.catch((error) => this.postError(channelId, root.ts!, error));
     }
   }
 
@@ -576,6 +587,14 @@ export class SlackBridge {
         } catch (error) {
           if (!String(error).includes("No active steerable turn")) throw error;
         }
+      }
+      if (this.bridgeOwnedActiveTurns.has(record.codexThreadId)) {
+        await client.chat.postMessage({
+          channel: record.slackChannelId,
+          thread_ts: record.slackThreadTs,
+          text: "A Codex turn is already running for this Slack thread. Wait for it to finish before starting another turn.",
+        });
+        return;
       }
       if (this.codex.runTurn) {
         const turn = this.codex.runTurn(record.codexThreadId, prompt, record.cwd);
@@ -706,6 +725,32 @@ export class SlackBridge {
       thread_ts: record.slackThreadTs,
       text: formatApprovalMessage(request),
       blocks: blocksForApproval(request),
+    });
+  }
+
+  private async postUserInputUnsupported(request: UserInputRequest): Promise<void> {
+    const message = [
+      "*Codex requested interactive input*",
+      request.prompt,
+      "The Slack bridge cannot answer elicitation prompts yet, so this request was rejected instead of sending an empty answer.",
+      "Continue the session locally or restate the task with all required details in your next Slack reply.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    if (!request.threadId) {
+      process.stderr.write(`${message}\n`);
+      return;
+    }
+    const record = await this.store.findByCodexThread(request.threadId);
+    if (!record) {
+      process.stderr.write(`${message}\n`);
+      return;
+    }
+    await this.app.client.chat.postMessage({
+      channel: record.slackChannelId,
+      thread_ts: record.slackThreadTs,
+      text: message,
     });
   }
 

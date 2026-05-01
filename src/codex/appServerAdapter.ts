@@ -8,6 +8,7 @@ import type {
   CodexAdapter,
   CodexSessionSummary,
   TurnResult,
+  UserInputRequest,
 } from "../types.js";
 import { extractFinalMessage } from "./finalMessage.js";
 import { listCodexSessions } from "./sessionIndex.js";
@@ -53,6 +54,17 @@ function commandFromApproval(params: unknown): string[] | undefined {
   if (Array.isArray(params.command) && params.command.every((part) => typeof part === "string")) return params.command;
   if (typeof params.command === "string") return [params.command];
   if (Array.isArray(params.argv) && params.argv.every((part) => typeof part === "string")) return params.argv;
+  return undefined;
+}
+
+function promptFromUserInput(params: unknown): string | undefined {
+  if (!isRecord(params)) return undefined;
+  for (const key of ["prompt", "message", "label", "title"]) {
+    const value = params[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  const request = params.request;
+  if (isRecord(request)) return promptFromUserInput(request);
   return undefined;
 }
 
@@ -183,6 +195,10 @@ export class AppServerCodexAdapter implements CodexAdapter {
     this.emitter.on("approval", handler);
   }
 
+  onUserInputRequest(handler: (request: UserInputRequest) => Promise<void>): void {
+    this.emitter.on("userInput", handler);
+  }
+
   private threadParams(cwd: string): Record<string, unknown> {
     return {
       cwd,
@@ -219,6 +235,10 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   private respond(id: string | number, result: unknown): void {
     this.child?.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+  }
+
+  private respondError(id: string | number, message: string): void {
+    this.child?.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } })}\n`);
   }
 
   private handleLine(line: string): void {
@@ -274,7 +294,17 @@ export class AppServerCodexAdapter implements CodexAdapter {
     }
 
     if (request.method === "item/tool/requestUserInput" || request.method === "mcpServer/elicitation/request") {
-      this.respond(request.id, { answers: [] });
+      await this.emitUserInputRequest({
+        id: request.id,
+        method: request.method,
+        threadId: approvalThreadId(request.params),
+        prompt: promptFromUserInput(request.params),
+        raw: request.params,
+      });
+      this.respondError(
+        request.id,
+        "Codex Slack Bridge does not support interactive elicitation requests yet. Restate the request without elicitation or continue from a local Codex terminal.",
+      );
       return;
     }
 
@@ -286,8 +316,17 @@ export class AppServerCodexAdapter implements CodexAdapter {
     await Promise.all(listeners.map((listener) => listener(request)));
   }
 
+  private async emitUserInputRequest(request: UserInputRequest): Promise<void> {
+    const listeners = this.emitter.listeners("userInput") as Array<(userInput: UserInputRequest) => Promise<void>>;
+    await Promise.all(listeners.map((listener) => listener(request)));
+  }
+
   handleNotificationForTest(method: string, params: unknown): void {
     this.handleNotification(method, params);
+  }
+
+  async handleServerRequestForTest(request: { id: string | number; method: string; params?: unknown }): Promise<void> {
+    await this.handleServerRequest(request);
   }
 
   private handleNotification(method: string, params: unknown): void {

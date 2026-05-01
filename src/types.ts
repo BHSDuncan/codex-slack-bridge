@@ -70,6 +70,14 @@ export interface ApprovalRequest {
   raw: unknown;
 }
 
+export interface UserInputRequest {
+  id: string | number;
+  method: string;
+  threadId?: string;
+  prompt?: string;
+  raw: unknown;
+}
+
 export interface ApprovalDecision {
   requestId: string | number;
   decision: "approved" | "approved_for_session" | "denied" | "abort";
@@ -88,4 +96,5 @@ export interface CodexAdapter {
   approve(decision: ApprovalDecision): Promise<void>;
   onFinalMessage(handler: (result: TurnResult) => Promise<void>): void;
   onApprovalRequest(handler: (request: ApprovalRequest) => Promise<void>): void;
+  onUserInputRequest(handler: (request: UserInputRequest) => Promise<void>): void;
 }

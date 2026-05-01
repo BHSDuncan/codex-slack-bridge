@@ -57,6 +57,27 @@ describe("SessionStore", () => {
     expect(await store.findBySlackThread("C1", "100.1")).toBeUndefined();
   });
 
+  it("serializes concurrent writes so mappings are not lost", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-slack-bridge-"));
+    const store = new SessionStore(dir);
+    await store.init();
+
+    await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        store.upsert({
+          slackChannelId: "C1",
+          slackThreadTs: `100.${index}`,
+          codexThreadId: `codex-${index}`,
+          liveMode: "app-server",
+          createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+          updatedAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+        }),
+      ),
+    );
+
+    await expect(store.list()).resolves.toHaveLength(10);
+  });
+
   it("deletes mappings by Slack thread and Codex thread", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-slack-bridge-"));
     const store = new SessionStore(dir);

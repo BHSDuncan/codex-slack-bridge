@@ -1,6 +1,14 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { ApprovalDecision, ApprovalRequest, BridgeConfig, CodexAdapter, CodexSessionSummary, TurnResult } from "../types.js";
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  BridgeConfig,
+  CodexAdapter,
+  CodexSessionSummary,
+  TurnResult,
+  UserInputRequest,
+} from "../types.js";
 import { listCodexSessions } from "./sessionIndex.js";
 
 const execFileAsync = promisify(execFile);
@@ -46,6 +54,8 @@ export class ExecCodexAdapter implements CodexAdapter {
   onFinalMessage(): void {}
 
   onApprovalRequest(_handler: (request: ApprovalRequest) => Promise<void>): void {}
+
+  onUserInputRequest(_handler: (request: UserInputRequest) => Promise<void>): void {}
 }
 
 function extractLastMessage(stdout: string): string {

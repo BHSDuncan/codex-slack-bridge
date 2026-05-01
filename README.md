@@ -9,8 +9,9 @@ Local Slack UI for Codex sessions on this machine.
 - Only the configured Slack user and configured channels/DMs can use the bridge.
 - The bridge is disabled by default unless `BRIDGE_ENABLED_ON_START=true`.
 - Normal progress is suppressed. Final turn output is posted to Slack.
-- Required Codex approval or elicitation requests are forwarded to Slack immediately.
-- Codex app-server is the primary adapter. `codex exec/resume` is available as a fallback adapter.
+- Required Codex approval requests are forwarded to Slack immediately.
+- Interactive Codex elicitation requests are rejected with a visible Slack notice instead of being answered silently.
+- Codex app-server is the runtime adapter.
 - Attached terminal-started sessions mirror future terminal-owned final answers from Codex rollout files.
 
 OpenClaw is intentionally not used in v1. Direct Codex CLI/app-server integration gives tighter control over local sessions, approvals, and Slack authorization with fewer moving parts.
@@ -48,7 +49,7 @@ OpenClaw is intentionally not used in v1. Direct Codex CLI/app-server integratio
 | `BRIDGE_APPROVAL_POLICY` | No | Codex approval policy for turns started by the bridge. Supported values are `on-request`, `untrusted`, and `never`; default is `on-request`. |
 | `BRIDGE_USE_CAFFEINATE` | No | Set to `true` only if the LaunchAgent should run the bridge under `caffeinate -dimsu`. Default is `false`; see durability notes below. |
 | `BRIDGE_CODEX_MODEL` | No | Optional Codex model override for bridge-created turns. Leave unset to use your Codex config default. |
-| `BRIDGE_CODEX_PROFILE` | No | Optional Codex profile name for the fallback `codex exec` adapter. The app-server adapter currently uses direct config fields instead of profiles. |
+| `BRIDGE_CODEX_PROFILE` | No | Reserved for future adapter support. The app-server adapter currently uses direct config fields instead of profiles. |
 
 ## Running with launchd
 
