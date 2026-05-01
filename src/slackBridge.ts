@@ -195,7 +195,75 @@ export class SlackBridge {
       }
       if (blockAction.action_id === "codex_session:attach") {
         await this.handleAttach(actor.channel.id, session, client, "");
+        return;
       }
+      if (blockAction.action_id === "codex_session:start_turn" && actor.trigger_id) {
+        await client.views.open({
+          trigger_id: actor.trigger_id,
+          view: {
+            type: "modal",
+            callback_id: "codex_start_turn",
+            private_metadata: JSON.stringify({ channelId: actor.channel.id, sessionId: session.id }),
+            title: { type: "plain_text", text: "Start Codex turn" },
+            submit: { type: "plain_text", text: "Start" },
+            close: { type: "plain_text", text: "Cancel" },
+            blocks: [
+              {
+                type: "section",
+                text: { type: "mrkdwn", text: `\`${session.id}\`${session.threadName ? ` - ${session.threadName}` : ""}` },
+              },
+              {
+                type: "input",
+                block_id: "prompt",
+                label: { type: "plain_text", text: "Prompt" },
+                element: {
+                  type: "plain_text_input",
+                  action_id: "value",
+                  multiline: true,
+                  min_length: 1,
+                },
+              },
+            ],
+          },
+        });
+      }
+    });
+
+    this.app.view("codex_start_turn", async ({ ack, body, view, client }) => {
+      const actor = body as { user?: { id?: string } };
+      let metadata: { channelId?: string; sessionId?: string };
+      try {
+        metadata = JSON.parse(view.private_metadata || "{}") as { channelId?: string; sessionId?: string };
+      } catch {
+        metadata = {};
+      }
+      const prompt = view.state.values.prompt?.value?.value?.trim();
+      const authError = authorizationError(this.config, { userId: actor.user?.id, channelId: metadata.channelId });
+      if (authError) {
+        await ack({
+          response_action: "errors",
+          errors: { prompt: authError },
+        });
+        return;
+      }
+      if (!prompt) {
+        await ack({
+          response_action: "errors",
+          errors: { prompt: "Enter a prompt to start the turn." },
+        });
+        return;
+      }
+      await ack();
+      if (!metadata.channelId || !metadata.sessionId) return;
+      const session = await resolveCodexSession(metadata.sessionId);
+      if (!session) {
+        await client.chat.postMessage({
+          channel: metadata.channelId,
+          text: `Could not resolve Codex session \`${metadata.sessionId}\`.`,
+        });
+        return;
+      }
+      await this.handleAttach(metadata.channelId, session, client, prompt);
     });
   }
 
