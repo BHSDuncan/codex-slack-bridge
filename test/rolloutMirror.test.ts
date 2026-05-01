@@ -84,6 +84,92 @@ describe("RolloutMirror", () => {
     ]);
   });
 
+  it("seeds an in-flight turn prompt from existing rollout lines without replaying completed turns", async () => {
+    const mirror = new RolloutMirror();
+    const seeded = await mirror.seedFromLinesForTest([
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "old-turn" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "user_message", message: "Old prompt" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "old-turn", last_agent_message: "Old answer" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "active-turn" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "user_message", message: "Active prompt" },
+      }),
+    ]);
+
+    expect(seeded).toEqual({
+      activeTurnId: "active-turn",
+      promptsByTurnId: { "active-turn": "Active prompt" },
+    });
+  });
+
+  it("uses a seeded prompt when an already-running turn completes after attach", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "rollout-mirror-"));
+    const rolloutPath = path.join(dir, "rollout.jsonl");
+    await fs.writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          type: "event_msg",
+          payload: { type: "task_started", turn_id: "active-turn" },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: { type: "user_message", message: "Already running prompt" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const mirror = new RolloutMirror(25);
+    const completions: MirroredTurnComplete[] = [];
+    await mirror.watch(
+      "thread-1",
+      rolloutPath,
+      async (event) => {
+        completions.push(event);
+      },
+      async () => {},
+    );
+
+    await fs.appendFile(
+      rolloutPath,
+      `${JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "task_complete",
+          turn_id: "active-turn",
+          last_agent_message: "Already running answer",
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    await waitFor(() => completions.length === 1);
+    await mirror.stop();
+
+    expect(completions).toEqual([
+      {
+        threadId: "thread-1",
+        turnId: "active-turn",
+        prompt: "Already running prompt",
+        finalMessage: "Already running answer",
+      },
+    ]);
+  });
+
   it("parses terminal approval notices as notifications only", async () => {
     const mirror = new RolloutMirror();
     const parsed = await mirror.handleLineForTest(

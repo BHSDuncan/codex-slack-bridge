@@ -35,9 +35,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class RolloutMirror {
   private mirrors = new Map<string, MirrorState>();
   private pollMs: number;
+  private seedBytes: number;
 
-  constructor(pollMs = 1000) {
+  constructor(pollMs = 1000, seedBytes = 512 * 1024) {
     this.pollMs = pollMs;
+    this.seedBytes = seedBytes;
   }
 
   async watch(
@@ -59,6 +61,7 @@ export class RolloutMirror {
       onComplete,
       onApproval,
     };
+    await this.seedFromExistingFile(state, stat.size);
     state.watcher = fs.watch(rolloutPath, () => {
       void this.readNewBytes(state);
     });
@@ -82,6 +85,48 @@ export class RolloutMirror {
 
   async handleLineForTest(threadId: string, line: string): Promise<ParsedRolloutEvent> {
     return parseRolloutLine(threadId, line);
+  }
+
+  async seedFromLinesForTest(lines: string[]): Promise<{ activeTurnId?: string; promptsByTurnId: Record<string, string> }> {
+    const state = testMirrorState();
+    await this.seedFromLines(state, lines);
+    return {
+      activeTurnId: state.activeTurnId,
+      promptsByTurnId: Object.fromEntries(state.promptsByTurnId.entries()),
+    };
+  }
+
+  private async seedFromExistingFile(state: MirrorState, fileSize: number): Promise<void> {
+    if (fileSize === 0) return;
+    const start = Math.max(0, fileSize - this.seedBytes);
+    const length = fileSize - start;
+    const handle = await fsp.open(state.rolloutPath, "r");
+    try {
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, start);
+      const chunk = buffer.toString("utf8");
+      const lines = chunk.split("\n");
+      if (start > 0) lines.shift();
+      await this.seedFromLines(state, lines.map((line) => line.trim()).filter(Boolean));
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async seedFromLines(state: MirrorState, lines: string[]): Promise<void> {
+    for (const line of lines) {
+      const parsed = parseRolloutLine(state.threadId, line);
+      if (parsed.taskStarted) {
+        state.activeTurnId = parsed.taskStarted.turnId;
+      }
+      if (parsed.userMessage && state.activeTurnId) {
+        state.promptsByTurnId.set(state.activeTurnId, parsed.userMessage.message);
+      }
+      if (parsed.complete?.turnId) {
+        state.promptsByTurnId.delete(parsed.complete.turnId);
+        if (state.activeTurnId === parsed.complete.turnId) state.activeTurnId = undefined;
+      }
+    }
   }
 
   private async readNewBytes(state: MirrorState): Promise<void> {
@@ -146,6 +191,20 @@ export class RolloutMirror {
       }
     }
   }
+}
+
+function testMirrorState(): MirrorState {
+  return {
+    threadId: "test-thread",
+    rolloutPath: "",
+    position: 0,
+    buffer: "",
+    reading: false,
+    seenApprovals: new Set(),
+    promptsByTurnId: new Map(),
+    onComplete: async () => {},
+    onApproval: async () => {},
+  };
 }
 
 function parseRolloutLine(threadId: string, line: string): ParsedRolloutEvent {
