@@ -14,6 +14,7 @@ type SlackCommand = {
   user_id: string;
   channel_id: string;
   text: string;
+  thread_ts?: string;
 };
 
 function now(): string {
@@ -98,6 +99,12 @@ function formatMirroredFinal(prompt: string, finalMessage: string): string {
   const normalizedPrompt = prompt.trim();
   if (!normalizedPrompt) return finalMessage;
   return `*Prompt*\n>${normalizedPrompt.replace(/\n/g, "\n>")}\n\n*Final message*\n${finalMessage}`;
+}
+
+interface AttachResult {
+  attached: boolean;
+  threadTs: string;
+  permalink?: string;
 }
 
 export class SlackBridge {
@@ -200,7 +207,14 @@ export class SlackBridge {
         return;
       }
       if (blockAction.action_id === "codex_session:attach") {
-        await this.handleAttach(actor.channel.id, session, client, "");
+        const result = await this.handleAttach(actor.channel.id, session, client, "");
+        if (!result.attached && actor.user?.id) {
+          await client.chat.postEphemeral({
+            channel: actor.channel.id,
+            user: actor.user.id,
+            text: `Codex session \`${session.id}\` is already attached${result.permalink ? `: ${result.permalink}` : "."}`,
+          });
+        }
         return;
       }
       if (blockAction.action_id === "codex_session:start_turn" && actor.trigger_id) {
@@ -269,7 +283,14 @@ export class SlackBridge {
         });
         return;
       }
-      await this.handleAttach(metadata.channelId, session, client, prompt);
+      const result = await this.handleAttach(metadata.channelId, session, client, prompt);
+      if (!result.attached && actor.user?.id) {
+        await client.chat.postEphemeral({
+          channel: metadata.channelId,
+          user: actor.user.id,
+          text: `Started the turn in the existing Codex Slack thread${result.permalink ? `: ${result.permalink}` : "."}`,
+        });
+      }
     });
   }
 
@@ -318,6 +339,11 @@ export class SlackBridge {
       return;
     }
 
+    if (parsed.name === "detach") {
+      await this.handleDetachCommand(command, parsed.args, respond);
+      return;
+    }
+
     if (!this.state.isEnabled()) {
       await respond({ response_type: "ephemeral", text: "Bridge is disabled. Run `/codex enable` first." });
       return;
@@ -347,8 +373,13 @@ export class SlackBridge {
         });
         return;
       }
-      await this.handleAttach(command.channel_id, session, client, parsed.name === "resume" ? rest : "");
-      await respond({ response_type: "ephemeral", text: `Attached Codex session \`${session.id}\` to a Slack thread.` });
+      const result = await this.handleAttach(command.channel_id, session, client, parsed.name === "resume" ? rest : "");
+      await respond({
+        response_type: "ephemeral",
+        text: result.attached
+          ? `Attached Codex session \`${session.id}\` to a Slack thread.`
+          : `Codex session \`${session.id}\` is already attached${result.permalink ? `: ${result.permalink}` : "."}`,
+      });
       return;
     }
 
@@ -390,7 +421,20 @@ export class SlackBridge {
     session: CodexSessionSummary,
     client: WebClient,
     prompt: string,
-  ): Promise<void> {
+  ): Promise<AttachResult> {
+    await this.store.cleanupDuplicateCodexMappings();
+    const existing = await this.store.findByCodexThread(session.id);
+    if (existing) {
+      if (prompt) {
+        void this.sendPrompt(existing, prompt, client);
+      }
+      return {
+        attached: false,
+        threadTs: existing.slackThreadTs,
+        permalink: await this.threadPermalink(client, existing),
+      };
+    }
+
     const root = await client.chat.postMessage({
       channel: channelId,
       text: `Codex session attached: ${session.threadName ?? session.id}`,
@@ -411,6 +455,54 @@ export class SlackBridge {
     if (prompt) {
       void this.sendPrompt(await this.requiredRecord(channelId, root.ts), prompt, client);
     }
+    return { attached: true, threadTs: root.ts, permalink: await this.threadPermalink(client, channelId, root.ts) };
+  }
+
+  private async handleDetachCommand(
+    command: SlackCommand,
+    args: string,
+    respond: (message: unknown) => Promise<unknown>,
+  ): Promise<void> {
+    const { first } = splitFirstArg(args);
+    if (first) {
+      const session = await this.resolveSessionArgument(command.user_id, command.channel_id, first);
+      if (!session) {
+        await respond({
+          response_type: "ephemeral",
+          text: `Could not resolve Codex session: ${first}. Use \`/codex list\` first if you want to detach by number.`,
+        });
+        return;
+      }
+      const removed = await this.store.deleteByCodexThread(session.id);
+      await this.rolloutMirror.unwatch(session.id);
+      await respond({
+        response_type: "ephemeral",
+        text:
+          removed.length > 0
+            ? `Detached Codex session \`${session.id}\` from ${removed.length} Slack thread${removed.length === 1 ? "" : "s"}.`
+            : `Codex session \`${session.id}\` was not attached.`,
+      });
+      return;
+    }
+
+    if (!command.thread_ts) {
+      await respond({
+        response_type: "ephemeral",
+        text: "Usage: run `/codex detach` in a mapped Slack thread, or use `/codex detach <session-id-or-number>`.",
+      });
+      return;
+    }
+
+    const removed = await this.store.deleteBySlackThread(command.channel_id, command.thread_ts);
+    if (!removed) {
+      await respond({ response_type: "ephemeral", text: "This Slack thread is not attached to a Codex session." });
+      return;
+    }
+    const remaining = await this.store.findAllByCodexThread(removed.codexThreadId);
+    if (remaining.length === 0) {
+      await this.rolloutMirror.unwatch(removed.codexThreadId);
+    }
+    await respond({ response_type: "ephemeral", text: `Detached Codex session \`${removed.codexThreadId}\` from this Slack thread.` });
   }
 
   private async sendPrompt(record: SessionRecord, prompt: string, client: WebClient): Promise<void> {
@@ -523,6 +615,24 @@ export class SlackBridge {
       thread_ts: record.slackThreadTs,
       text: message,
     });
+  }
+
+  private async threadPermalink(client: WebClient, record: SessionRecord): Promise<string | undefined>;
+  private async threadPermalink(client: WebClient, channelId: string, threadTs: string): Promise<string | undefined>;
+  private async threadPermalink(
+    client: WebClient,
+    recordOrChannelId: SessionRecord | string,
+    maybeThreadTs?: string,
+  ): Promise<string | undefined> {
+    const channel = typeof recordOrChannelId === "string" ? recordOrChannelId : recordOrChannelId.slackChannelId;
+    const messageTs = typeof recordOrChannelId === "string" ? maybeThreadTs : recordOrChannelId.slackThreadTs;
+    if (!messageTs) return undefined;
+    try {
+      const response = await client.chat.getPermalink({ channel, message_ts: messageTs });
+      return response.permalink;
+    } catch {
+      return undefined;
+    }
   }
 
   private async postApproval(request: ApprovalRequest): Promise<void> {

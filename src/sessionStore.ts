@@ -26,6 +26,11 @@ export class SessionStore {
   async upsert(record: SessionRecord): Promise<void> {
     const data = await this.read();
     data.listSnapshots ??= [];
+    data.sessions = data.sessions.filter(
+      (candidate) =>
+        candidate.codexThreadId !== record.codexThreadId ||
+        (candidate.slackChannelId === record.slackChannelId && candidate.slackThreadTs === record.slackThreadTs),
+    );
     const index = data.sessions.findIndex(
       (candidate) => candidate.slackChannelId === record.slackChannelId && candidate.slackThreadTs === record.slackThreadTs,
     );
@@ -47,6 +52,59 @@ export class SessionStore {
   async findByCodexThread(codexThreadId: string): Promise<SessionRecord | undefined> {
     const data = await this.read();
     return data.sessions.find((record) => record.codexThreadId === codexThreadId);
+  }
+
+  async findAllByCodexThread(codexThreadId: string): Promise<SessionRecord[]> {
+    const data = await this.read();
+    return data.sessions.filter((record) => record.codexThreadId === codexThreadId);
+  }
+
+  async deleteBySlackThread(slackChannelId: string, slackThreadTs: string): Promise<SessionRecord | undefined> {
+    const data = await this.read();
+    const index = data.sessions.findIndex(
+      (record) => record.slackChannelId === slackChannelId && record.slackThreadTs === slackThreadTs,
+    );
+    if (index < 0) return undefined;
+    const [removed] = data.sessions.splice(index, 1);
+    await this.write(data);
+    return removed;
+  }
+
+  async deleteByCodexThread(codexThreadId: string): Promise<SessionRecord[]> {
+    const data = await this.read();
+    const removed = data.sessions.filter((record) => record.codexThreadId === codexThreadId);
+    if (removed.length === 0) return [];
+    data.sessions = data.sessions.filter((record) => record.codexThreadId !== codexThreadId);
+    await this.write(data);
+    return removed;
+  }
+
+  async cleanupDuplicateCodexMappings(): Promise<SessionRecord[]> {
+    const data = await this.read();
+    const byCodexThread = new Map<string, SessionRecord[]>();
+    for (const record of data.sessions) {
+      const records = byCodexThread.get(record.codexThreadId) ?? [];
+      records.push(record);
+      byCodexThread.set(record.codexThreadId, records);
+    }
+
+    const removed: SessionRecord[] = [];
+    const kept = new Set<string>();
+    for (const records of byCodexThread.values()) {
+      if (records.length === 1) {
+        kept.add(mappingKey(records[0]));
+        continue;
+      }
+      const sorted = [...records].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      kept.add(mappingKey(sorted[0]));
+      removed.push(...sorted.slice(1));
+    }
+
+    if (removed.length > 0) {
+      data.sessions = data.sessions.filter((record) => kept.has(mappingKey(record)));
+      await this.write(data);
+    }
+    return removed;
   }
 
   async list(): Promise<SessionRecord[]> {
@@ -86,4 +144,8 @@ export class SessionStore {
     await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
     await fs.rename(tmp, this.filePath);
   }
+}
+
+function mappingKey(record: SessionRecord): string {
+  return `${record.slackChannelId}:${record.slackThreadTs}`;
 }

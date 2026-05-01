@@ -8,6 +8,10 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const store = new SessionStore(config.dataDir);
   await store.init();
+  const removedDuplicates = await store.cleanupDuplicateCodexMappings();
+  if (removedDuplicates.length > 0) {
+    process.stdout.write(`Removed ${removedDuplicates.length} duplicate Codex Slack mapping(s).\n`);
+  }
 
   const state = new BridgeState(config.enabledOnStart);
   const codex = new AppServerCodexAdapter(config);

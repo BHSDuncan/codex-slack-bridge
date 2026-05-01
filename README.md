@@ -115,8 +115,9 @@ caffeinate -dimsu
 - `/codex new <prompt>`
 - `/codex resume <session-id-or-name> [prompt]`
 - `/codex attach <session-id-or-name>`
+- `/codex detach [session-id-or-name]`
 
-After `new`, `resume`, or `attach`, reply in the created Slack thread to continue that Codex session.
+After `new`, `resume`, or `attach`, reply in the mapped Slack thread to continue that Codex session. A Codex session can have only one active Slack control thread. If you attach a session that is already attached, the bridge reuses the existing Slack thread instead of creating a duplicate.
 
 `/codex list` shows numbered recent sessions and stores that list for your Slack user in the current channel or DM. You can use the numbers with later commands:
 
@@ -125,6 +126,8 @@ After `new`, `resume`, or `attach`, reply in the created Slack thread to continu
 /codex resume 2 Continue from here and run tests.
 ```
 
-UUIDs and unique title fragments still work. The first ten list entries also include Slack buttons: **Attach** creates a Slack thread for that session, and **Start turn...** opens a prompt modal before creating the thread and starting work.
+UUIDs and unique title fragments still work. The first ten list entries also include Slack buttons: **Attach** creates or reuses a Slack thread for that session, and **Start turn...** opens a prompt modal before creating or reusing the thread and starting work.
 
 When `attach` is used on a session that is currently active in the terminal, the bridge watches that session's rollout file and posts future terminal-owned final answers into the Slack thread. The bridge scans the tail of the rollout file at attach time, so mirrored terminal-owned final answers usually include the prompt that kicked off the in-flight turn even if the prompt was recorded before attach. Approval prompts from terminal-owned turns are notification-only; approve or deny those in the terminal. After the terminal-owned turn completes, replying in Slack starts the next turn through the bridge.
+
+Use `/codex detach` in a mapped Slack thread to remove that Slack thread's session mapping. Use `/codex detach <session-id-or-number>` from any authorized channel or DM to detach a specific session. Detaching the final mapping for a session also stops its rollout mirror watcher. On startup, the bridge removes older duplicate mappings and keeps the newest Slack thread for each Codex session.

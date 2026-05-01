@@ -10,6 +10,7 @@ export function helpText(): string {
     "`/codex new <prompt>` - start a new Codex session",
     "`/codex resume <session-id-or-name> [prompt]` - bind a Codex session to a Slack thread",
     "`/codex attach <session-id-or-name>` - attach a Slack thread to an existing Codex session",
+    "`/codex detach [session-id-or-name]` - detach a Slack thread from a Codex session",
   ].join("\n");
 }
 
