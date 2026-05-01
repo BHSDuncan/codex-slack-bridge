@@ -1,6 +1,6 @@
 # Codex Slack Bridge
 
-Local Slack UI for Codex sessions on this machine.
+Local Slack UI for Codex sessions on your local machine.
 
 ## Current shape
 
