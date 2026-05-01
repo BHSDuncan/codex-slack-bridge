@@ -44,7 +44,7 @@ OpenClaw is intentionally not used in v1. Direct Codex CLI/app-server integratio
 | `BRIDGE_DEFAULT_CWD` | Yes | Default local working directory for new or attached Codex sessions. Use the parent directory or repo path where you normally want Codex to start. |
 | `BRIDGE_CODEX_BIN` | Yes | Path or command name for the Codex CLI binary. On this machine it is usually `/opt/homebrew/bin/codex`. |
 | `BRIDGE_DATA_DIR` | No | Directory for bridge-local state, including Slack-thread-to-Codex-session mappings. Defaults to `.bridge-data` in this repo. |
-| `BRIDGE_ENABLED_ON_START` | No | Set to `true` to allow Slack control immediately when the daemon starts. Default is `false`, so you must run `/codex enable`. |
+| `BRIDGE_ENABLED_ON_START` | No | Initial enabled state when no persisted bridge state exists. Default is `false`, so the first run requires `/codex enable`. After that, `/codex enable` and `/codex disable` persist across daemon restarts in `BRIDGE_DATA_DIR`. |
 | `BRIDGE_APPROVAL_POLICY` | No | Codex approval policy for turns started by the bridge. Supported values are `on-request`, `untrusted`, and `never`; default is `on-request`. |
 | `BRIDGE_USE_CAFFEINATE` | No | Set to `true` only if the LaunchAgent should run the bridge under `caffeinate -dimsu`. Default is `false`; see durability notes below. |
 | `BRIDGE_CODEX_MODEL` | No | Optional Codex model override for bridge-created turns. Leave unset to use your Codex config default. |
@@ -67,7 +67,7 @@ npm run launchd:status
 npm run launchd:uninstall
 ```
 
-The LaunchAgent starts the daemon at login, but the bridge can still remain logically disabled if `BRIDGE_ENABLED_ON_START=false`. In that setup the process is available and connected to Slack, but Codex access still requires `/codex enable`.
+The LaunchAgent starts the daemon at login. The logical enabled/disabled state is stored in `BRIDGE_DATA_DIR`, so `/codex enable` and `/codex disable` survive daemon restarts. `BRIDGE_ENABLED_ON_START` is only used before that persisted state file exists.
 
 After bridge code changes, restart the LaunchAgent:
 
@@ -115,7 +115,7 @@ caffeinate -dimsu
 - `/codex new <prompt>`
 - `/codex resume <session-id-or-name> [prompt]`
 - `/codex attach <session-id-or-name>`
-- `/codex detach [session-id-or-name]`
+- `/codex detach <session-id-or-name>`
 
 After `new`, `resume`, or `attach`, reply in the mapped Slack thread to continue that Codex session. A Codex session can have only one active Slack control thread. If you attach a session that is already attached, the bridge reuses the existing Slack thread instead of creating a duplicate.
 
@@ -130,4 +130,4 @@ UUIDs and unique title fragments still work. The first ten list entries also inc
 
 When `attach` is used on a session that is currently active in the terminal, the bridge watches that session's rollout file and posts future terminal-owned final answers into the Slack thread. The bridge scans the tail of the rollout file at attach time, so mirrored terminal-owned final answers usually include the prompt that kicked off the in-flight turn even if the prompt was recorded before attach. Approval prompts from terminal-owned turns are notification-only; approve or deny those in the terminal. After the terminal-owned turn completes, replying in Slack starts the next turn through the bridge.
 
-Use `/codex detach` in a mapped Slack thread to remove that Slack thread's session mapping. Use `/codex detach <session-id-or-number>` from any authorized channel or DM to detach a specific session. Detaching the final mapping for a session also stops its rollout mirror watcher. On startup, the bridge removes older duplicate mappings and keeps the newest Slack thread for each Codex session.
+Slack does not support slash commands inside threads, so thread-local detach uses the **Detach** button on the Slack control thread or a plain thread reply of `detach` or `codex detach`. Use `/codex detach <session-id-or-number>` from any authorized channel or DM to detach a specific session. Detaching the final mapping for a session also stops its rollout mirror watcher. On startup, the bridge removes older duplicate mappings and keeps the newest Slack thread for each Codex session.

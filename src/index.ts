@@ -13,7 +13,7 @@ async function main(): Promise<void> {
     process.stdout.write(`Removed ${removedDuplicates.length} duplicate Codex Slack mapping(s).\n`);
   }
 
-  const state = new BridgeState(config.enabledOnStart);
+  const state = new BridgeState(config.enabledOnStart, config.dataDir);
   const codex = new AppServerCodexAdapter(config);
   const bridge = new SlackBridge(config, store, state, codex);
 

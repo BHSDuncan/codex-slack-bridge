@@ -59,6 +59,23 @@ function blocksForApproval(request: ApprovalRequest): KnownBlock[] {
   ];
 }
 
+function blocksForControlThread(threadId: string): KnownBlock[] {
+  return [
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Detach" },
+          style: "danger",
+          action_id: "codex_thread:detach",
+          value: JSON.stringify({ threadId }),
+        },
+      ],
+    },
+  ];
+}
+
 function blocksForSessionList(sessions: CodexSessionSummary[]): KnownBlock[] {
   return sessions.slice(0, 10).flatMap((session, index) => [
     {
@@ -99,6 +116,10 @@ function formatMirroredFinal(prompt: string, finalMessage: string): string {
   const normalizedPrompt = prompt.trim();
   if (!normalizedPrompt) return finalMessage;
   return `*Prompt*\n>${normalizedPrompt.replace(/\n/g, "\n>")}\n\n*Final message*\n${finalMessage}`;
+}
+
+function isThreadDetachMessage(text: string): boolean {
+  return /^(?:codex\s+detach|detach)$/i.test(text.trim());
 }
 
 interface AttachResult {
@@ -165,10 +186,19 @@ export class SlackBridge {
       };
       if (event.subtype || event.bot_id || !event.user || !event.channel || !event.text || !event.thread_ts) return;
       if (!isAuthorized(this.config, { userId: event.user, channelId: event.channel })) return;
-      if (!this.state.isEnabled()) return;
 
       const record = await this.store.findBySlackThread(event.channel, event.thread_ts);
       if (!record) return;
+      if (isThreadDetachMessage(event.text)) {
+        await this.detachRecord(record);
+        await client.chat.postMessage({
+          channel: record.slackChannelId,
+          thread_ts: record.slackThreadTs,
+          text: `Detached Codex session \`${record.codexThreadId}\` from this Slack thread.`,
+        });
+        return;
+      }
+      if (!this.state.isEnabled()) return;
       await this.sendPrompt(record, event.text, client);
     });
 
@@ -247,6 +277,31 @@ export class SlackBridge {
           },
         });
       }
+    });
+
+    this.app.action(/^codex_thread:/, async ({ body, action, ack, client }) => {
+      await ack();
+      const blockAction = action as unknown as BlockAction & { value?: string; action_id?: string };
+      const actor = body as { user?: { id?: string }; channel?: { id?: string }; message?: { ts?: string; thread_ts?: string } };
+      if (!isAuthorized(this.config, { userId: actor.user?.id, channelId: actor.channel?.id })) return;
+      if (!actor.channel?.id || !actor.user?.id || blockAction.action_id !== "codex_thread:detach") return;
+      const threadTs = actor.message?.thread_ts ?? actor.message?.ts;
+      if (!threadTs) return;
+      const record = await this.store.findBySlackThread(actor.channel.id, threadTs);
+      if (!record) {
+        await client.chat.postEphemeral({
+          channel: actor.channel.id,
+          user: actor.user.id,
+          text: "This Slack thread is not attached to a Codex session.",
+        });
+        return;
+      }
+      await this.detachRecord(record);
+      await client.chat.postMessage({
+        channel: record.slackChannelId,
+        thread_ts: record.slackThreadTs,
+        text: `Detached Codex session \`${record.codexThreadId}\` from this Slack thread.`,
+      });
     });
 
     this.app.view("codex_start_turn", async ({ ack, body, view, client }) => {
@@ -390,6 +445,7 @@ export class SlackBridge {
     const root = await client.chat.postMessage({
       channel: channelId,
       text: `Codex session: ${sessionTitleFromPrompt(prompt)}`,
+      blocks: blocksForControlThread("pending"),
     });
     if (!root.ts) throw new Error("Slack did not return a thread timestamp");
 
@@ -438,6 +494,7 @@ export class SlackBridge {
     const root = await client.chat.postMessage({
       channel: channelId,
       text: `Codex session attached: ${session.threadName ?? session.id}`,
+      blocks: blocksForControlThread(session.id),
     });
     if (!root.ts) throw new Error("Slack did not return a thread timestamp");
 
@@ -493,16 +550,21 @@ export class SlackBridge {
       return;
     }
 
-    const removed = await this.store.deleteBySlackThread(command.channel_id, command.thread_ts);
+    const removed = await this.store.findBySlackThread(command.channel_id, command.thread_ts);
     if (!removed) {
       await respond({ response_type: "ephemeral", text: "This Slack thread is not attached to a Codex session." });
       return;
     }
-    const remaining = await this.store.findAllByCodexThread(removed.codexThreadId);
-    if (remaining.length === 0) {
-      await this.rolloutMirror.unwatch(removed.codexThreadId);
-    }
+    await this.detachRecord(removed);
     await respond({ response_type: "ephemeral", text: `Detached Codex session \`${removed.codexThreadId}\` from this Slack thread.` });
+  }
+
+  private async detachRecord(record: SessionRecord): Promise<void> {
+    await this.store.deleteBySlackThread(record.slackChannelId, record.slackThreadTs);
+    const remaining = await this.store.findAllByCodexThread(record.codexThreadId);
+    if (remaining.length === 0) {
+      await this.rolloutMirror.unwatch(record.codexThreadId);
+    }
   }
 
   private async sendPrompt(record: SessionRecord, prompt: string, client: WebClient): Promise<void> {
