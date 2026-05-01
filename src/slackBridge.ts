@@ -3,11 +3,12 @@ import type { WebClient } from "@slack/web-api";
 import { authorizationError, isAuthorized } from "./authorization.js";
 import { BridgeState } from "./bridgeState.js";
 import { formatApprovalMessage } from "./codex/approvalText.js";
+import { RolloutMirror } from "./codex/rolloutMirror.js";
 import { resolveCodexSession } from "./codex/sessionIndex.js";
 import { parseCodexCommand, splitFirstArg } from "./slack/commandParser.js";
 import { formatBridgeSessions, formatSessionList, helpText, sessionTitleFromPrompt } from "./slack/format.js";
 import { SessionStore } from "./sessionStore.js";
-import type { ApprovalRequest, BridgeConfig, CodexAdapter, SessionRecord, TurnResult } from "./types.js";
+import type { ApprovalRequest, BridgeConfig, CodexAdapter, CodexSessionSummary, SessionRecord, TurnResult } from "./types.js";
 
 type SlackCommand = {
   user_id: string;
@@ -63,12 +64,16 @@ export class SlackBridge {
   private store: SessionStore;
   private state: BridgeState;
   private codex: CodexAdapter;
+  private rolloutMirror: RolloutMirror;
+  private bridgeOwnedActiveTurns = new Set<string>();
+  private bridgeOwnedGraceUntil = new Map<string, number>();
 
   constructor(config: BridgeConfig, store: SessionStore, state: BridgeState, codex: CodexAdapter) {
     this.config = config;
     this.store = store;
     this.state = state;
     this.codex = codex;
+    this.rolloutMirror = new RolloutMirror();
     this.app = new App({
       token: config.slackBotToken,
       appToken: config.slackAppToken,
@@ -198,7 +203,7 @@ export class SlackBridge {
         await respond({ response_type: "ephemeral", text: `Could not resolve Codex session: ${first}` });
         return;
       }
-      await this.handleAttach(command.channel_id, session.id, session.threadName, client, parsed.name === "resume" ? rest : "");
+      await this.handleAttach(command.channel_id, session, client, parsed.name === "resume" ? rest : "");
       await respond({ response_type: "ephemeral", text: `Attached Codex session \`${session.id}\` to a Slack thread.` });
       return;
     }
@@ -225,19 +230,27 @@ export class SlackBridge {
 
   private async handleAttach(
     channelId: string,
-    codexThreadId: string,
-    title: string | undefined,
+    session: CodexSessionSummary,
     client: WebClient,
     prompt: string,
   ): Promise<void> {
     const root = await client.chat.postMessage({
       channel: channelId,
-      text: `Codex session attached: ${title ?? codexThreadId}`,
+      text: `Codex session attached: ${session.threadName ?? session.id}`,
     });
     if (!root.ts) throw new Error("Slack did not return a thread timestamp");
 
-    await this.codex.attachThread(codexThreadId, this.config.defaultCwd);
-    await this.saveMapping(channelId, root.ts, codexThreadId, title, "app-server");
+    const cwd = session.cwd ?? this.config.defaultCwd;
+    await this.codex.attachThread(session.id, cwd);
+    await this.saveMapping(channelId, root.ts, session.id, session.threadName, "app-server", cwd, session.path);
+    if (session.path) {
+      await this.rolloutMirror.watch(
+        session.id,
+        session.path,
+        async (event) => this.postMirroredFinal(event),
+        async (event) => this.postMirroredApprovalNotice(event.threadId, event.message),
+      );
+    }
     if (prompt) {
       void this.sendPrompt(await this.requiredRecord(channelId, root.ts), prompt, client);
     }
@@ -254,7 +267,9 @@ export class SlackBridge {
         }
       }
       if (this.codex.runTurn) {
-        void this.codex.runTurn(record.codexThreadId, prompt, record.cwd).catch((error) => this.postError(record.slackChannelId, record.slackThreadTs, error));
+        const turn = this.codex.runTurn(record.codexThreadId, prompt, record.cwd);
+        this.trackBridgeOwnedTurn(record.codexThreadId, turn);
+        void turn.catch((error) => this.postError(record.slackChannelId, record.slackThreadTs, error));
       } else {
         const result = await this.codex.resumeThread(record.codexThreadId, prompt, record.cwd);
         await this.postFinal(result);
@@ -274,6 +289,8 @@ export class SlackBridge {
     codexThreadId: string,
     title: string | undefined,
     liveMode: SessionRecord["liveMode"],
+    cwd = this.config.defaultCwd,
+    rolloutPath?: string,
   ): Promise<void> {
     const timestamp = now();
     await this.store.upsert({
@@ -281,7 +298,8 @@ export class SlackBridge {
       slackThreadTs,
       codexThreadId,
       title,
-      cwd: this.config.defaultCwd,
+      cwd,
+      rolloutPath,
       liveMode,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -301,6 +319,49 @@ export class SlackBridge {
       channel: record.slackChannelId,
       thread_ts: record.slackThreadTs,
       text: result.finalMessage,
+    });
+  }
+
+  private trackBridgeOwnedTurn(threadId: string, turn: Promise<TurnResult>): void {
+    this.bridgeOwnedActiveTurns.add(threadId);
+    this.bridgeOwnedGraceUntil.delete(threadId);
+    void turn.then(
+      () => {
+        this.bridgeOwnedActiveTurns.delete(threadId);
+        this.bridgeOwnedGraceUntil.set(threadId, Date.now() + 30_000);
+      },
+      () => {
+        this.bridgeOwnedActiveTurns.delete(threadId);
+        this.bridgeOwnedGraceUntil.set(threadId, Date.now() + 30_000);
+      },
+    );
+  }
+
+  private shouldIgnoreMirroredFinal(threadId: string): boolean {
+    if (this.bridgeOwnedActiveTurns.has(threadId)) return true;
+    const graceUntil = this.bridgeOwnedGraceUntil.get(threadId);
+    if (!graceUntil) return false;
+    if (graceUntil >= Date.now()) {
+      this.bridgeOwnedGraceUntil.delete(threadId);
+      return true;
+    }
+    this.bridgeOwnedGraceUntil.delete(threadId);
+    return false;
+  }
+
+  private async postMirroredFinal(result: TurnResult): Promise<void> {
+    if (this.shouldIgnoreMirroredFinal(result.threadId)) return;
+    await this.postFinal(result);
+  }
+
+  private async postMirroredApprovalNotice(threadId: string, message: string): Promise<void> {
+    if (this.bridgeOwnedActiveTurns.has(threadId)) return;
+    const record = await this.store.findByCodexThread(threadId);
+    if (!record) return;
+    await this.app.client.chat.postMessage({
+      channel: record.slackChannelId,
+      thread_ts: record.slackThreadTs,
+      text: message,
     });
   }
 

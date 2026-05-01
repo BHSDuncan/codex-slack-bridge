@@ -11,6 +11,7 @@ Local Slack UI for Codex sessions on this machine.
 - Normal progress is suppressed. Final turn output is posted to Slack.
 - Required Codex approval or elicitation requests are forwarded to Slack immediately.
 - Codex app-server is the primary adapter. `codex exec/resume` is available as a fallback adapter.
+- Attached terminal-started sessions mirror future terminal-owned final answers from Codex rollout files.
 
 OpenClaw is intentionally not used in v1. Direct Codex CLI/app-server integration gives tighter control over local sessions, approvals, and Slack authorization with fewer moving parts.
 
@@ -59,3 +60,5 @@ OpenClaw is intentionally not used in v1. Direct Codex CLI/app-server integratio
 - `/codex attach <session-id-or-name>`
 
 After `new`, `resume`, or `attach`, reply in the created Slack thread to continue that Codex session.
+
+When `attach` is used on a session that is currently active in the terminal, the bridge watches that session's rollout file and posts future terminal-owned final answers into the Slack thread. Approval prompts from terminal-owned turns are notification-only; approve or deny those in the terminal. After the terminal-owned turn completes, replying in Slack starts the next turn through the bridge.

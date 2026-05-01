@@ -21,9 +21,22 @@ export interface SessionRecord {
   codexThreadId: string;
   title?: string;
   cwd?: string;
+  rolloutPath?: string;
   liveMode: "app-server" | "exec" | "pty";
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MirroredTurnComplete {
+  threadId: string;
+  turnId?: string;
+  finalMessage: string;
+}
+
+export interface MirroredApprovalNotice {
+  threadId: string;
+  turnId?: string;
+  message: string;
 }
 
 export interface CodexSessionSummary {
