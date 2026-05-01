@@ -58,6 +58,42 @@ function blocksForApproval(request: ApprovalRequest): KnownBlock[] {
   ];
 }
 
+function blocksForSessionList(sessions: CodexSessionSummary[]): KnownBlock[] {
+  return sessions.slice(0, 10).flatMap((session, index) => [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: sessionListLine(session, index),
+      },
+    } satisfies KnownBlock,
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Attach" },
+          action_id: "codex_session:attach",
+          value: JSON.stringify({ sessionId: session.id }),
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Start turn..." },
+          style: "primary",
+          action_id: "codex_session:start_turn",
+          value: JSON.stringify({ sessionId: session.id }),
+        },
+      ],
+    } satisfies KnownBlock,
+  ]);
+}
+
+function sessionListLine(session: CodexSessionSummary, index: number): string {
+  const name = session.threadName ? ` - ${session.threadName}` : session.cwd ? ` - ${session.cwd}` : "";
+  const updated = session.updatedAt ? ` (${session.updatedAt})` : "";
+  return `*${index + 1}.* \`${session.id}\`${name}${updated}`;
+}
+
 export class SlackBridge {
   private app: App;
   private config: BridgeConfig;
@@ -141,6 +177,26 @@ export class SlackBridge {
         });
       }
     });
+
+    this.app.action(/^codex_session:/, async ({ body, action, ack, client }) => {
+      await ack();
+      const blockAction = action as unknown as BlockAction & { value?: string; action_id?: string };
+      const actor = body as { user?: { id?: string }; channel?: { id?: string }; trigger_id?: string };
+      if (!isAuthorized(this.config, { userId: actor.user?.id, channelId: actor.channel?.id })) return;
+      if (!blockAction.value || !actor.channel?.id) return;
+      const parsed = JSON.parse(blockAction.value) as { sessionId: string };
+      const session = await resolveCodexSession(parsed.sessionId);
+      if (!session) {
+        await client.chat.postMessage({
+          channel: actor.channel.id,
+          text: `Could not resolve Codex session \`${parsed.sessionId}\`.`,
+        });
+        return;
+      }
+      if (blockAction.action_id === "codex_session:attach") {
+        await this.handleAttach(actor.channel.id, session, client, "");
+      }
+    });
   }
 
   private async handleSlashCommand(
@@ -173,13 +229,18 @@ export class SlackBridge {
     }
     if (parsed.name === "list") {
       const sessions = await this.codex.listSessions();
+      const visibleSessions = sessions.slice(0, 20);
       await this.store.saveListSnapshot({
         slackUserId: command.user_id,
         slackChannelId: command.channel_id,
-        sessions: sessions.slice(0, 20),
+        sessions: visibleSessions,
         createdAt: now(),
       });
-      await respond({ response_type: "ephemeral", text: formatSessionList(sessions) });
+      await respond({
+        response_type: "ephemeral",
+        text: formatSessionList(visibleSessions),
+        blocks: visibleSessions.length ? blocksForSessionList(visibleSessions) : undefined,
+      });
       return;
     }
 
