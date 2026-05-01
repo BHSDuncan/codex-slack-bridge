@@ -69,6 +69,33 @@ npm run launchd:uninstall
 
 The LaunchAgent starts the daemon at login, but the bridge can still remain logically disabled if `BRIDGE_ENABLED_ON_START=false`. In that setup the process is available and connected to Slack, but Codex access still requires `/codex enable`.
 
+After bridge code changes, restart the LaunchAgent:
+
+```sh
+npm run launchd:install
+```
+
+That command unloads any existing bridge service, rewrites the plist, bootstraps it, and kickstarts the new process. If dependencies changed, run the full local check first:
+
+```sh
+npm install
+npm run build
+npm test
+npm run launchd:install
+```
+
+To restart the currently installed service without rewriting the plist:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.duncan.codex-slack-bridge
+```
+
+To watch logs during restart:
+
+```sh
+tail -f .bridge-data/logs/launchd.out.log .bridge-data/logs/launchd.err.log
+```
+
 ### Caffeinate
 
 `launchd` makes the process restart and reconnect, but it does not make the Mac operate while asleep. If the laptop sleeps, the bridge and local Codex sessions pause and Slack Socket Mode disconnects until wake.
