@@ -518,9 +518,10 @@ export class SlackBridge {
     if (!root.ts) throw new Error("Slack did not return a thread timestamp");
 
     const cwd = session.cwd ?? this.config.defaultCwd;
+    const recentTurn = session.path ? await latestCompletedTurnFromRollout(session.path) : undefined;
     await this.codex.attachThread(session.id, cwd);
     await this.saveMapping(channelId, root.ts, session.id, session.threadName, "app-server", cwd, session.path);
-    await this.postRecentTurnContextIfIdle(channelId, root.ts, session.path);
+    await this.postRecentTurnContext(channelId, root.ts, recentTurn);
     if (session.path) {
       await this.rolloutMirror.watch(
         session.id,
@@ -535,9 +536,7 @@ export class SlackBridge {
     return { attached: true, threadTs: root.ts, permalink: await this.threadPermalink(client, channelId, root.ts) };
   }
 
-  private async postRecentTurnContextIfIdle(channelId: string, threadTs: string, rolloutPath?: string): Promise<void> {
-    if (!rolloutPath) return;
-    const recentTurn = await latestCompletedTurnFromRollout(rolloutPath);
+  private async postRecentTurnContext(channelId: string, threadTs: string, recentTurn?: LatestCompletedTurn): Promise<void> {
     if (!recentTurn) return;
     await this.app.client.chat.postMessage({
       channel: channelId,
