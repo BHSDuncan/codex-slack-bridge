@@ -234,9 +234,31 @@ function parseRolloutLine(threadId: string, line: string): ParsedRolloutEvent {
       },
     };
   }
+  const question = questionNoticeFromPayload(payload);
+  if (question) return { approval: question };
 
   const approval = approvalNoticeFromPayload(threadId, payload);
   return approval ? { approval } : {};
+}
+
+function questionNoticeFromPayload(payload: Record<string, unknown>): Omit<MirroredApprovalNotice, "threadId"> | undefined {
+  if (payload.type !== "agent_message" || typeof payload.message !== "string") return undefined;
+  const message = payload.message.trim();
+  if (!isQuestionLike(message)) return undefined;
+
+  return {
+    turnId: typeof payload.turn_id === "string" ? payload.turn_id : undefined,
+    message: [
+      "Terminal-owned Codex turn appears to be waiting for your input.",
+      message,
+      "Reply in this Slack thread to answer through the bridge, or continue in the terminal.",
+    ].join("\n\n"),
+  };
+}
+
+function isQuestionLike(message: string): boolean {
+  if (message.endsWith("?")) return true;
+  return /\b(?:which|what|where|when|who|how|should|would|could|can|do you want|would you like|please confirm)\b/i.test(message);
 }
 
 function approvalNoticeFromPayload(

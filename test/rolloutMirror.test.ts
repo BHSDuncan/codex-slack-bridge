@@ -192,6 +192,43 @@ describe("RolloutMirror", () => {
     expect(parsed.approval?.message).toContain("`npm install`");
   });
 
+  it("parses terminal agent questions as input notifications", async () => {
+    const mirror = new RolloutMirror();
+    const parsed = await mirror.handleLineForTest(
+      "thread-1",
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          turn_id: "turn-1",
+          message: "Which deployment target should I use?",
+        },
+      }),
+    );
+
+    expect(parsed.approval?.turnId).toBe("turn-1");
+    expect(parsed.approval?.message).toContain("waiting for your input");
+    expect(parsed.approval?.message).toContain("Which deployment target should I use?");
+    expect(parsed.approval?.message).toContain("Reply in this Slack thread");
+  });
+
+  it("ignores non-question terminal agent messages while mirroring", async () => {
+    const mirror = new RolloutMirror();
+    const parsed = await mirror.handleLineForTest(
+      "thread-1",
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          turn_id: "turn-1",
+          message: "I am checking the test output now.",
+        },
+      }),
+    );
+
+    expect(parsed.approval).toBeUndefined();
+  });
+
   it("watches only lines appended after attach time", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "rollout-mirror-"));
     const rolloutPath = path.join(dir, "rollout.jsonl");
