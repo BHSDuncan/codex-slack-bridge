@@ -600,10 +600,12 @@ export class SlackBridge {
   private async sendPrompt(record: SessionRecord, prompt: string, client: WebClient): Promise<void> {
     try {
       if (this.codex.steerThread) {
+        this.markBridgeOwnedTurnStarted(record.codexThreadId);
         try {
           await this.codex.steerThread(record.codexThreadId, prompt);
           return;
         } catch (error) {
+          this.markBridgeOwnedTurnCompleted(record.codexThreadId);
           if (!String(error).includes("No active steerable turn")) throw error;
         }
       }
@@ -661,7 +663,7 @@ export class SlackBridge {
     return record;
   }
 
-  private async postFinal(result: TurnResult): Promise<void> {
+  private async postFinal(result: TurnResult, bridgeOwned = true): Promise<void> {
     const record = await this.store.findByCodexThread(result.threadId);
     if (!record) return;
     await this.app.client.chat.postMessage({
@@ -669,29 +671,36 @@ export class SlackBridge {
       thread_ts: record.slackThreadTs,
       text: withUserMention(this.config.allowedUserId, result.finalMessage),
     });
+    if (bridgeOwned) this.markBridgeOwnedTurnCompleted(result.threadId);
   }
 
   private trackBridgeOwnedTurn(threadId: string, turn: Promise<TurnResult>): void {
-    this.bridgeOwnedActiveTurns.add(threadId);
-    this.bridgeOwnedGraceUntil.delete(threadId);
+    this.markBridgeOwnedTurnStarted(threadId);
     void turn.then(
       () => {
-        this.bridgeOwnedActiveTurns.delete(threadId);
-        this.bridgeOwnedGraceUntil.set(threadId, Date.now() + 30_000);
+        this.markBridgeOwnedTurnCompleted(threadId);
       },
       () => {
-        this.bridgeOwnedActiveTurns.delete(threadId);
-        this.bridgeOwnedGraceUntil.set(threadId, Date.now() + 30_000);
+        this.markBridgeOwnedTurnCompleted(threadId);
       },
     );
   }
 
-  private shouldIgnoreMirroredFinal(threadId: string): boolean {
+  private markBridgeOwnedTurnStarted(threadId: string): void {
+    this.bridgeOwnedActiveTurns.add(threadId);
+    this.bridgeOwnedGraceUntil.delete(threadId);
+  }
+
+  private markBridgeOwnedTurnCompleted(threadId: string): void {
+    this.bridgeOwnedActiveTurns.delete(threadId);
+    this.bridgeOwnedGraceUntil.set(threadId, Date.now() + 30_000);
+  }
+
+  private shouldIgnoreMirroredEvent(threadId: string): boolean {
     if (this.bridgeOwnedActiveTurns.has(threadId)) return true;
     const graceUntil = this.bridgeOwnedGraceUntil.get(threadId);
     if (!graceUntil) return false;
     if (graceUntil >= Date.now()) {
-      this.bridgeOwnedGraceUntil.delete(threadId);
       return true;
     }
     this.bridgeOwnedGraceUntil.delete(threadId);
@@ -699,15 +708,18 @@ export class SlackBridge {
   }
 
   private async postMirroredFinal(result: TurnResult): Promise<void> {
-    if (this.shouldIgnoreMirroredFinal(result.threadId)) return;
-    await this.postFinal({
-      ...result,
-      finalMessage: "prompt" in result && typeof result.prompt === "string" ? formatMirroredFinal(result.prompt, result.finalMessage) : result.finalMessage,
-    });
+    if (this.shouldIgnoreMirroredEvent(result.threadId)) return;
+    await this.postFinal(
+      {
+        ...result,
+        finalMessage: "prompt" in result && typeof result.prompt === "string" ? formatMirroredFinal(result.prompt, result.finalMessage) : result.finalMessage,
+      },
+      false,
+    );
   }
 
   private async postMirroredApprovalNotice(threadId: string, message: string): Promise<void> {
-    if (this.bridgeOwnedActiveTurns.has(threadId)) return;
+    if (this.shouldIgnoreMirroredEvent(threadId)) return;
     const record = await this.store.findByCodexThread(threadId);
     if (!record) return;
     await this.app.client.chat.postMessage({
