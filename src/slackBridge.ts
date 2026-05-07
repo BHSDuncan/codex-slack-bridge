@@ -130,6 +130,10 @@ function isThreadDetachMessage(text: string): boolean {
   return /^(?:codex\s+detach|detach)$/i.test(text.trim());
 }
 
+function withUserMention(userId: string, text: string): string {
+  return `<@${userId}> ${text}`;
+}
+
 interface AttachResult {
   attached: boolean;
   threadTs: string;
@@ -453,7 +457,7 @@ export class SlackBridge {
   private async handleNew(channelId: string, prompt: string, client: WebClient): Promise<void> {
     const root = await client.chat.postMessage({
       channel: channelId,
-      text: `Codex session: ${sessionTitleFromPrompt(prompt)}`,
+      text: withUserMention(this.config.allowedUserId, `Codex session: ${sessionTitleFromPrompt(prompt)}`),
       blocks: blocksForControlThread("pending"),
     });
     if (!root.ts) throw new Error("Slack did not return a thread timestamp");
@@ -504,7 +508,7 @@ export class SlackBridge {
 
     const root = await client.chat.postMessage({
       channel: channelId,
-      text: `Codex session attached: ${session.threadName ?? session.id}`,
+      text: withUserMention(this.config.allowedUserId, `Codex session attached: ${session.threadName ?? session.id}`),
       blocks: blocksForControlThread(session.id),
     });
     if (!root.ts) throw new Error("Slack did not return a thread timestamp");
@@ -648,7 +652,7 @@ export class SlackBridge {
     await this.app.client.chat.postMessage({
       channel: record.slackChannelId,
       thread_ts: record.slackThreadTs,
-      text: result.finalMessage,
+      text: withUserMention(this.config.allowedUserId, result.finalMessage),
     });
   }
 
@@ -694,7 +698,7 @@ export class SlackBridge {
     await this.app.client.chat.postMessage({
       channel: record.slackChannelId,
       thread_ts: record.slackThreadTs,
-      text: message,
+      text: withUserMention(this.config.allowedUserId, message),
     });
   }
 
@@ -723,7 +727,7 @@ export class SlackBridge {
     await this.app.client.chat.postMessage({
       channel: record.slackChannelId,
       thread_ts: record.slackThreadTs,
-      text: formatApprovalMessage(request),
+      text: withUserMention(this.config.allowedUserId, formatApprovalMessage(request)),
       blocks: blocksForApproval(request),
     });
   }
@@ -750,7 +754,7 @@ export class SlackBridge {
     await this.app.client.chat.postMessage({
       channel: record.slackChannelId,
       thread_ts: record.slackThreadTs,
-      text: message,
+      text: withUserMention(this.config.allowedUserId, message),
     });
   }
 
@@ -758,7 +762,7 @@ export class SlackBridge {
     await this.app.client.chat.postMessage({
       channel: channelId,
       thread_ts: threadTs,
-      text: `Codex bridge error: ${error instanceof Error ? error.message : String(error)}`,
+      text: withUserMention(this.config.allowedUserId, `Codex bridge error: ${error instanceof Error ? error.message : String(error)}`),
     });
   }
 }

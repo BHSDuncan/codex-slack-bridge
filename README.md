@@ -155,6 +155,8 @@ caffeinate -dimsu
 
 After `new`, `resume`, or `attach`, reply in the mapped Slack thread to continue that Codex session. A Codex session can have only one active Slack control thread. If you attach a session that is already attached, the bridge reuses the existing Slack thread instead of creating a duplicate.
 
+Codex output messages mention `BRIDGE_ALLOWED_USER_ID` by default so Slack web and mobile clients treat final answers, approvals, interactive-input notices, and bridge errors as user notifications. Slack does not expose a bot API for toggling your per-thread notification setting directly, so explicit mentions are the reliable notification mechanism.
+
 `/codex list` shows numbered recent sessions and stores that list for your Slack user in the current channel or DM. You can use the numbers with later commands:
 
 ```text
