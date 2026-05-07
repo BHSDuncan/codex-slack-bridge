@@ -2,10 +2,72 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { RolloutMirror } from "../src/codex/rolloutMirror.js";
+import { latestCompletedTurnFromLines, RolloutMirror } from "../src/codex/rolloutMirror.js";
 import type { MirroredApprovalNotice, MirroredTurnComplete } from "../src/types.js";
 
 describe("RolloutMirror", () => {
+  it("finds the latest completed turn when the rollout is idle", () => {
+    const latest = latestCompletedTurnFromLines([
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-1" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "user_message", message: "First prompt" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: "First output" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-2" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "user_message", message: "Second prompt" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "turn-2", last_agent_message: "Second output" },
+      }),
+    ]);
+
+    expect(latest).toEqual({
+      turnId: "turn-2",
+      prompt: "Second prompt",
+      finalMessage: "Second output",
+    });
+  });
+
+  it("does not return recent context when a rollout has an in-flight turn", () => {
+    const latest = latestCompletedTurnFromLines([
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-1" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "user_message", message: "Completed prompt" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: "Completed output" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-2" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "user_message", message: "In-flight prompt" },
+      }),
+    ]);
+
+    expect(latest).toBeUndefined();
+  });
+
   it("parses terminal-owned task completion messages", async () => {
     const mirror = new RolloutMirror();
     const parsed = await mirror.handleLineForTest(

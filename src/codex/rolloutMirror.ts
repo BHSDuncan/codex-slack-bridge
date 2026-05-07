@@ -28,8 +28,73 @@ interface ParsedRolloutEvent {
   approval?: Omit<MirroredApprovalNotice, "threadId">;
 }
 
+export interface LatestCompletedTurn {
+  prompt: string;
+  finalMessage: string;
+  turnId?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+export async function latestCompletedTurnFromRollout(rolloutPath: string, tailBytes = 1024 * 1024): Promise<LatestCompletedTurn | undefined> {
+  let stat: Awaited<ReturnType<typeof fsp.stat>>;
+  try {
+    stat = await fsp.stat(rolloutPath);
+  } catch {
+    return undefined;
+  }
+  if (stat.size === 0) return undefined;
+
+  const start = Math.max(0, stat.size - tailBytes);
+  const length = stat.size - start;
+  const handle = await fsp.open(rolloutPath, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, start);
+    const lines = buffer
+      .toString("utf8")
+      .split("\n")
+      .slice(start > 0 ? 1 : 0)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return latestCompletedTurnFromLines(lines);
+  } finally {
+    await handle.close();
+  }
+}
+
+export function latestCompletedTurnFromLines(lines: string[]): LatestCompletedTurn | undefined {
+  let activeTurnId: string | undefined;
+  const promptsByTurnId = new Map<string, string>();
+  let latest: LatestCompletedTurn | undefined;
+
+  for (const line of lines) {
+    const parsed = parseRolloutLine("context", line);
+    if (parsed.taskStarted) {
+      activeTurnId = parsed.taskStarted.turnId;
+    }
+    if (parsed.userMessage && activeTurnId) {
+      promptsByTurnId.set(activeTurnId, parsed.userMessage.message);
+    }
+    if (parsed.complete) {
+      const prompt = parsed.complete.turnId ? promptsByTurnId.get(parsed.complete.turnId) : undefined;
+      if (prompt) {
+        latest = {
+          turnId: parsed.complete.turnId,
+          prompt,
+          finalMessage: parsed.complete.finalMessage,
+        };
+      }
+      if (parsed.complete.turnId) {
+        promptsByTurnId.delete(parsed.complete.turnId);
+        if (activeTurnId === parsed.complete.turnId) activeTurnId = undefined;
+      }
+    }
+  }
+
+  return activeTurnId ? undefined : latest;
 }
 
 export class RolloutMirror {

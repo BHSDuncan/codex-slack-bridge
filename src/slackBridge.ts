@@ -3,7 +3,7 @@ import type { WebClient } from "@slack/web-api";
 import { authorizationError, isAuthorized } from "./authorization.js";
 import { BridgeState } from "./bridgeState.js";
 import { formatApprovalMessage } from "./codex/approvalText.js";
-import { RolloutMirror } from "./codex/rolloutMirror.js";
+import { latestCompletedTurnFromRollout, RolloutMirror, type LatestCompletedTurn } from "./codex/rolloutMirror.js";
 import { resolveCodexSession } from "./codex/sessionIndex.js";
 import { parseCodexCommand, parsePositiveOrdinal, splitFirstArg } from "./slack/commandParser.js";
 import { formatBridgeSessions, formatSessionList, helpText, sessionTitleFromPrompt } from "./slack/format.js";
@@ -124,6 +124,10 @@ function formatMirroredFinal(prompt: string, finalMessage: string): string {
   const normalizedPrompt = prompt.trim();
   if (!normalizedPrompt) return finalMessage;
   return `*Prompt*\n>${normalizedPrompt.replace(/\n/g, "\n>")}\n\n*Final message*\n${finalMessage}`;
+}
+
+function formatRecentTurnContext(turn: LatestCompletedTurn): string {
+  return `*Most recent completed turn*\n\n*Prompt*\n>${turn.prompt.trim().replace(/\n/g, "\n>")}\n\n*Final message*\n${turn.finalMessage}`;
 }
 
 function isThreadDetachMessage(text: string): boolean {
@@ -516,6 +520,7 @@ export class SlackBridge {
     const cwd = session.cwd ?? this.config.defaultCwd;
     await this.codex.attachThread(session.id, cwd);
     await this.saveMapping(channelId, root.ts, session.id, session.threadName, "app-server", cwd, session.path);
+    await this.postRecentTurnContextIfIdle(channelId, root.ts, session.path);
     if (session.path) {
       await this.rolloutMirror.watch(
         session.id,
@@ -528,6 +533,17 @@ export class SlackBridge {
       void this.sendPrompt(await this.requiredRecord(channelId, root.ts), prompt, client);
     }
     return { attached: true, threadTs: root.ts, permalink: await this.threadPermalink(client, channelId, root.ts) };
+  }
+
+  private async postRecentTurnContextIfIdle(channelId: string, threadTs: string, rolloutPath?: string): Promise<void> {
+    if (!rolloutPath) return;
+    const recentTurn = await latestCompletedTurnFromRollout(rolloutPath);
+    if (!recentTurn) return;
+    await this.app.client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: withUserMention(this.config.allowedUserId, formatRecentTurnContext(recentTurn)),
+    });
   }
 
   private async handleDetachCommand(

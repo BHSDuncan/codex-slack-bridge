@@ -157,6 +157,8 @@ After `new`, `resume`, or `attach`, reply in the mapped Slack thread to continue
 
 Codex output messages mention `BRIDGE_ALLOWED_USER_ID` by default so Slack web and mobile clients treat final answers, approvals, interactive-input notices, and bridge errors as user notifications. Slack does not expose a bot API for toggling your per-thread notification setting directly, so explicit mentions are the reliable notification mechanism.
 
+When `attach` or **Start turn...** creates a Slack control thread for an idle Codex session, the bridge posts the most recent completed turn's prompt and final answer into the thread before starting any new work. If the rollout file shows an in-flight turn, the bridge skips that context seed and waits to mirror the active turn's next relevant output.
+
 `/codex list` shows numbered recent sessions and stores that list for your Slack user in the current channel or DM. You can use the numbers with later commands:
 
 ```text
