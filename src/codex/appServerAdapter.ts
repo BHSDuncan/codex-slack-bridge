@@ -77,6 +77,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
   private activeTurns = new Map<string, { resolve: (result: TurnResult) => void; reject: (error: Error) => void }>();
   private activeTurnIdsByThread = new Map<string, string>();
   private finalMessagesByThread = new Map<string, string>();
+  private resumedThreads = new Set<string>();
 
   constructor(config: BridgeConfig) {
     this.config = config;
@@ -96,6 +97,9 @@ export class AppServerCodexAdapter implements CodexAdapter {
       for (const turn of this.activeTurns.values()) turn.reject(error);
       this.pending.clear();
       this.activeTurns.clear();
+      this.activeTurnIdsByThread.clear();
+      this.finalMessagesByThread.clear();
+      this.resumedThreads.clear();
       this.child = undefined;
     });
 
@@ -121,6 +125,9 @@ export class AppServerCodexAdapter implements CodexAdapter {
   async stop(): Promise<void> {
     this.child?.kill();
     this.child = undefined;
+    this.activeTurnIdsByThread.clear();
+    this.finalMessagesByThread.clear();
+    this.resumedThreads.clear();
   }
 
   async createThread(prompt: string, cwd = this.config.defaultCwd): Promise<TurnResult> {
@@ -133,10 +140,12 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const response = await this.request("thread/start", this.threadParams(cwd));
     const threadId = threadIdFromResponse(response);
     if (!threadId) throw new Error("Codex did not return a thread id for thread/start");
+    this.resumedThreads.add(threadId);
     return threadId;
   }
 
   async runTurn(threadId: string, prompt: string, cwd = this.config.defaultCwd): Promise<TurnResult> {
+    await this.ensureThreadResumed(threadId, cwd);
     return this.startTurn(threadId, prompt, cwd);
   }
 
@@ -161,19 +170,12 @@ export class AppServerCodexAdapter implements CodexAdapter {
       approvalsReviewer: "user",
       model: this.config.model ?? null,
     });
+    this.resumedThreads.add(threadId);
     return this.startTurn(threadId, prompt, cwd);
   }
 
   async attachThread(threadId: string, cwd = this.config.defaultCwd): Promise<void> {
-    await this.start();
-    await this.request("thread/resume", {
-      threadId,
-      cwd,
-      excludeTurns: true,
-      approvalPolicy: this.config.approvalPolicy,
-      approvalsReviewer: "user",
-      model: this.config.model ?? null,
-    });
+    await this.ensureThreadResumed(threadId, cwd, true);
   }
 
   async listSessions(): Promise<CodexSessionSummary[]> {
@@ -206,6 +208,20 @@ export class AppServerCodexAdapter implements CodexAdapter {
       approvalsReviewer: "user",
       model: this.config.model ?? null,
     };
+  }
+
+  private async ensureThreadResumed(threadId: string, cwd: string, excludeTurns = false): Promise<void> {
+    await this.start();
+    if (this.resumedThreads.has(threadId)) return;
+    await this.request("thread/resume", {
+      threadId,
+      cwd,
+      excludeTurns,
+      approvalPolicy: this.config.approvalPolicy,
+      approvalsReviewer: "user",
+      model: this.config.model ?? null,
+    });
+    this.resumedThreads.add(threadId);
   }
 
   private async startTurn(threadId: string, prompt: string, cwd: string): Promise<TurnResult> {
