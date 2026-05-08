@@ -171,3 +171,31 @@ UUIDs and unique title fragments still work. The first ten list entries also inc
 When `attach` is used on a session that is currently active in the terminal, the bridge watches that session's rollout file and posts future terminal-owned final answers into the Slack thread. The bridge scans the tail of the rollout file at attach time, so mirrored terminal-owned final answers usually include the prompt that kicked off the in-flight turn even if the prompt was recorded before attach. Approval prompts from terminal-owned turns are notification-only; approve or deny those in the terminal. After the terminal-owned turn completes, replying in Slack starts the next turn through the bridge.
 
 Slack does not support slash commands inside threads, so thread-local detach uses the **Detach** button on the Slack control thread or a plain thread reply of `detach` or `codex detach`. Use `/codex detach <session-id-or-number>` from any authorized channel or DM to detach a specific session. Detaching the final mapping for a session also stops its rollout mirror watcher. On startup, the bridge removes older duplicate mappings and keeps the newest Slack thread for each Codex session.
+
+## Troubleshooting
+
+### Resumed Codex CLI shows only partial history
+
+If a session continued through the Slack bridge looks complete in Slack but appears truncated after
+returning to `codex resume` in the terminal, first check whether Codex still has the full transcript:
+
+- Press `Ctrl+T` in the Codex TUI to open the transcript overlay.
+- If the overlay shows the full history, the Slack bridge and Codex rollout file are intact.
+
+Codex TUI can cap the main view's terminal scrollback buffer during initial resume replay via
+`tui.terminal_resize_reflow_max_rows`. On long sessions, that cap can make the main resumed view
+look like history was lost even though the full transcript is loaded.
+
+Workaround:
+
+```toml
+# ~/.codex/config.toml
+[tui]
+terminal_resize_reflow_max_rows = 0
+```
+
+Or run one resume with the cap disabled:
+
+```sh
+codex resume <session-id> -c tui.terminal_resize_reflow_max_rows=0
+```
