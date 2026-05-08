@@ -13,6 +13,13 @@ interface RolloutSession extends CodexSessionSummary {
   path: string;
 }
 
+interface SessionIndexRecord {
+  id?: string;
+  thread_name?: string;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
 const SESSION_ID_PATTERN = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
 export async function listCodexSessions(codexHome = path.join(os.homedir(), ".codex")): Promise<CodexSessionSummary[]> {
@@ -36,7 +43,62 @@ export async function listCodexSessions(codexHome = path.join(os.homedir(), ".co
   return [...byId.values()].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
 }
 
+export async function upsertCodexSessionIndex(
+  session: Pick<CodexSessionSummary, "id" | "threadName" | "updatedAt">,
+  codexHome = path.join(os.homedir(), ".codex"),
+): Promise<void> {
+  if (!session.id) return;
+
+  const indexPath = path.join(codexHome, "session_index.jsonl");
+  const records = await readRawSessionIndex(indexPath);
+  const existingIndex = records.findIndex((record) => record.id === session.id);
+  const previous = existingIndex >= 0 ? records[existingIndex] : {};
+  const next: SessionIndexRecord = {
+    ...previous,
+    id: session.id,
+    thread_name: session.threadName ?? previous.thread_name,
+    updated_at: session.updatedAt ?? new Date().toISOString(),
+  };
+
+  if (existingIndex >= 0) records[existingIndex] = next;
+  else records.push(next);
+  records.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+
+  await fs.mkdir(codexHome, { recursive: true });
+  const body = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+  const tmpPath = `${indexPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, body, "utf8");
+  await fs.rename(tmpPath, indexPath);
+}
+
+export async function syncDiscoveredCodexSessionsToIndex(codexHome = path.join(os.homedir(), ".codex")): Promise<CodexSessionSummary[]> {
+  const sessions = await listCodexSessions(codexHome);
+  for (const session of sessions) {
+    await upsertCodexSessionIndex(
+      {
+        id: session.id,
+        threadName: session.threadName,
+        updatedAt: session.updatedAt,
+      },
+      codexHome,
+    );
+  }
+  return sessions;
+}
+
 async function readSessionIndex(indexPath: string): Promise<CodexSessionSummary[]> {
+  const records = await readRawSessionIndex(indexPath);
+  return records
+    .map((parsed) => ({
+      id: parsed.id ?? "",
+      threadName: parsed.thread_name,
+      updatedAt: parsed.updated_at,
+    }))
+    .filter((session) => session.id)
+    .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+}
+
+async function readRawSessionIndex(indexPath: string): Promise<SessionIndexRecord[]> {
   let raw: string;
   try {
     raw = await fs.readFile(indexPath, "utf8");
@@ -50,18 +112,12 @@ async function readSessionIndex(indexPath: string): Promise<CodexSessionSummary[
     .filter(Boolean)
     .map((line) => {
       try {
-        const parsed = JSON.parse(line) as { id?: string; thread_name?: string; updated_at?: string };
-        return {
-          id: parsed.id ?? "",
-          threadName: parsed.thread_name,
-          updatedAt: parsed.updated_at,
-        };
+        return JSON.parse(line) as SessionIndexRecord;
       } catch {
-        return { id: "" };
+        return {};
       }
     })
-    .filter((session) => session.id)
-    .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    .filter((record) => record.id);
 }
 
 async function discoverRolloutSessions(roots: string[]): Promise<RolloutSession[]> {

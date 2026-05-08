@@ -11,11 +11,21 @@ import type {
   UserInputRequest,
 } from "../types.js";
 import { extractFinalMessage } from "./finalMessage.js";
-import { listCodexSessions } from "./sessionIndex.js";
+import { listCodexSessions, syncDiscoveredCodexSessionsToIndex, upsertCodexSessionIndex } from "./sessionIndex.js";
 
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
+}
+
+interface AppServerAdapterOptions {
+  codexHome?: string;
+  syncSessionIndex?: boolean;
+}
+
+interface ActiveTurnMetadata {
+  threadId: string;
+  threadName: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,17 +80,20 @@ function promptFromUserInput(params: unknown): string | undefined {
 
 export class AppServerCodexAdapter implements CodexAdapter {
   private config: BridgeConfig;
+  private options: AppServerAdapterOptions;
   private child?: ChildProcessWithoutNullStreams;
   private nextId = 1;
   private pending = new Map<string | number, PendingRequest>();
   private emitter = new EventEmitter();
   private activeTurns = new Map<string, { resolve: (result: TurnResult) => void; reject: (error: Error) => void }>();
   private activeTurnIdsByThread = new Map<string, string>();
+  private activeTurnMetadata = new Map<string, ActiveTurnMetadata>();
   private finalMessagesByThread = new Map<string, string>();
   private resumedThreads = new Set<string>();
 
-  constructor(config: BridgeConfig) {
+  constructor(config: BridgeConfig, options: AppServerAdapterOptions = {}) {
     this.config = config;
+    this.options = options;
   }
 
   async start(): Promise<void> {
@@ -98,6 +111,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       this.pending.clear();
       this.activeTurns.clear();
       this.activeTurnIdsByThread.clear();
+      this.activeTurnMetadata.clear();
       this.finalMessagesByThread.clear();
       this.resumedThreads.clear();
       this.child = undefined;
@@ -179,6 +193,13 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async listSessions(): Promise<CodexSessionSummary[]> {
+    if (this.options.syncSessionIndex !== false) {
+      try {
+        return await syncDiscoveredCodexSessionsToIndex(this.options.codexHome);
+      } catch (error) {
+        process.stderr.write(`Failed to sync discovered Codex sessions to the session index: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    }
     return listCodexSessions();
   }
 
@@ -233,6 +254,10 @@ export class AppServerCodexAdapter implements CodexAdapter {
       input: [{ type: "text", text: prompt }],
     });
     const turnId = turnIdFromResponse(response);
+    const metadata = { threadId, threadName: sessionTitleFromPrompt(prompt) };
+    this.activeTurnMetadata.set(turnId ?? threadId, metadata);
+    this.activeTurnMetadata.set(threadId, metadata);
+    void this.syncSessionIndex(metadata);
     return new Promise((resolve, reject) => {
       this.activeTurns.set(turnId ?? threadId, { resolve, reject });
     });
@@ -369,8 +394,13 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const finalMessage = this.finalMessagesByThread.get(threadId) ?? extractFinalMessage(params.turn);
     this.finalMessagesByThread.delete(threadId);
     const result = { threadId, finalMessage };
+    const turnId = turnIdFromResponse(params);
+    const metadata = this.activeTurnMetadata.get(turnId ?? "") ?? this.activeTurnMetadata.get(threadId);
+    this.activeTurnMetadata.delete(threadId);
+    if (turnId) this.activeTurnMetadata.delete(turnId);
+    if (metadata) void this.syncSessionIndex(metadata);
     for (const [key, turn] of this.activeTurns.entries()) {
-      if (key === threadId || key === turnIdFromResponse(params)) {
+      if (key === threadId || key === turnId) {
         turn.resolve(result);
         this.activeTurns.delete(key);
         break;
@@ -378,4 +408,26 @@ export class AppServerCodexAdapter implements CodexAdapter {
     }
     this.emitter.emit("final", result);
   }
+
+  private async syncSessionIndex(metadata: ActiveTurnMetadata): Promise<void> {
+    if (this.options.syncSessionIndex === false) return;
+    try {
+      await upsertCodexSessionIndex(
+        {
+          id: metadata.threadId,
+          threadName: metadata.threadName,
+          updatedAt: new Date().toISOString(),
+        },
+        this.options.codexHome,
+      );
+    } catch (error) {
+      process.stderr.write(`Failed to update Codex session index for ${metadata.threadId}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+}
+
+function sessionTitleFromPrompt(prompt: string): string {
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  if (!normalized) return "Codex session";
+  return normalized.length <= 80 ? normalized : `${normalized.slice(0, 77)}...`;
 }

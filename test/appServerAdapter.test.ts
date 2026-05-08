@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AppServerCodexAdapter } from "../src/codex/appServerAdapter.js";
 import type { BridgeConfig, TurnResult, UserInputRequest } from "../src/types.js";
@@ -16,7 +19,7 @@ const config: BridgeConfig = {
 
 describe("AppServerCodexAdapter", () => {
   it("resumes an existing thread before starting a turn after adapter restart", async () => {
-    const adapter = new AppServerCodexAdapter(config);
+    const adapter = new AppServerCodexAdapter(config, { syncSessionIndex: false });
     const requests: Array<{ method: string; params: unknown }> = [];
     Object.assign(adapter as unknown as { start: () => Promise<void>; request: (method: string, params?: unknown) => Promise<unknown> }, {
       start: async () => {},
@@ -56,8 +59,51 @@ describe("AppServerCodexAdapter", () => {
     });
   });
 
+  it("updates the Codex session index for bridge-owned app-server turns", async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "codex-home-"));
+    const adapter = new AppServerCodexAdapter(config, { codexHome });
+    const requests: string[] = [];
+    Object.assign(adapter as unknown as { start: () => Promise<void>; request: (method: string, params?: unknown) => Promise<unknown> }, {
+      start: async () => {},
+      request: async (method: string) => {
+        requests.push(method);
+        return method === "turn/start" ? { turnId: "turn-1" } : null;
+      },
+    });
+
+    const turn = adapter.runTurn("thread-1", "Continue from Slack with a long enough prompt to title the session", "/repo");
+    await waitFor(() => requests.includes("turn/start"));
+    adapter.handleNotificationForTest("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "agentMessage",
+        phase: "final_answer",
+        text: "Done.",
+      },
+    });
+    adapter.handleNotificationForTest("turn/completed", {
+      threadId: "thread-1",
+      turn: {
+        id: "turn-1",
+        items: [],
+        status: "completed",
+      },
+    });
+
+    await expect(turn).resolves.toEqual({ threadId: "thread-1", finalMessage: "Done." });
+    await waitFor(async () => {
+      try {
+        const raw = await fs.readFile(path.join(codexHome, "session_index.jsonl"), "utf8");
+        return raw.includes("thread-1") && raw.includes("Continue from Slack");
+      } catch {
+        return false;
+      }
+    });
+  });
+
   it("uses final agentMessage text from item/completed when turn/completed has no items", async () => {
-    const adapter = new AppServerCodexAdapter(config);
+    const adapter = new AppServerCodexAdapter(config, { syncSessionIndex: false });
     const finals: TurnResult[] = [];
     adapter.onFinalMessage(async (result) => {
       finals.push(result);
@@ -85,7 +131,7 @@ describe("AppServerCodexAdapter", () => {
   });
 
   it("emits elicitation requests instead of answering with empty input", async () => {
-    const adapter = new AppServerCodexAdapter(config);
+    const adapter = new AppServerCodexAdapter(config, { syncSessionIndex: false });
     const requests: UserInputRequest[] = [];
     adapter.onUserInputRequest(async (request) => {
       requests.push(request);
@@ -115,10 +161,10 @@ describe("AppServerCodexAdapter", () => {
   });
 });
 
-async function waitFor(predicate: () => boolean): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 1000;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("Timed out waiting for condition");
